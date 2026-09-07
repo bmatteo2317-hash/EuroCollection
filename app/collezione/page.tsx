@@ -5,7 +5,7 @@ import {
   getTotalCount,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership } from "@/lib/collection";
+import { fetchOwnership, fetchYears } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CompletionDonut from "@/components/CompletionDonut";
 import CountryFlag from "@/components/CountryFlag";
@@ -36,6 +36,7 @@ export default async function CollezionePage() {
     supabase,
     userId
   );
+  const coinYears = await fetchYears(supabase, userId);
 
   const catalog = getCatalog();
   const total = getTotalCount();
@@ -135,6 +136,7 @@ export default async function CollezionePage() {
             coins={ownedCoins.sort((a, b) => b.year - a.year)}
             initialCollection={collection}
             initialDetails={details}
+            initialYears={coinYears}
             isGuest={false}
           />
         )}

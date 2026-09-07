@@ -5,12 +5,11 @@ import {
   getTotalCount,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership } from "@/lib/collection";
+import { fetchOwnership, fetchYears } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CountryExplorer from "@/components/CountryExplorer";
 import CoinGrid from "@/components/CoinGrid";
-import type { CollectionMap } from "@/lib/types";
-import type { OwnershipMap } from "@/lib/types";
+import type { CollectionMap, CoinYearsMap, OwnershipMap } from "@/lib/types";
 
 // Pagina personalizzata (mostra il progresso dell'utente loggato):
 // deve essere renderizzata dinamicamente, non prerenderizzata in build
@@ -27,6 +26,7 @@ export default async function Home() {
   // Collezione utente (se loggato) per statistiche + UI ottimistica in home
   let collection: CollectionMap = {};
   let details: OwnershipMap = {};
+  let coinYears: CoinYearsMap = {};
   let owned = 0;
   let userEmail: string | null = null;
   try {
@@ -39,6 +39,7 @@ export default async function Home() {
       const fetched = await fetchOwnership(supabase, user.id);
       collection = fetched.quantities;
       details = fetched.details;
+      coinYears = await fetchYears(supabase, user.id);
       owned = Object.keys(collection).length;
     }
   } catch {
@@ -110,6 +111,7 @@ export default async function Home() {
           coins={commemoratives}
           initialCollection={collection}
           initialDetails={details}
+          initialYears={coinYears}
           isGuest={!userEmail}
         />
       </section>

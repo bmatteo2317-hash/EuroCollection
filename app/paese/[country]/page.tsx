@@ -8,11 +8,10 @@ import {
   isValidCountry,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership } from "@/lib/collection";
+import { fetchOwnership, fetchYears } from "@/lib/collection";
 import CoinGrid from "@/components/CoinGrid";
 import CountryFlag from "@/components/CountryFlag";
-import type { CollectionMap } from "@/lib/types";
-import type { OwnershipMap } from "@/lib/types";
+import type { CollectionMap, CoinYearsMap, OwnershipMap } from "@/lib/types";
 
 // Le pagine paese mostrano il possesso dell'utente loggato (cookies via
 // Supabase): rendering dinamico per-request. `generateStaticParams` resta
@@ -50,6 +49,7 @@ export default async function PaesePage({
 
   let collection: CollectionMap = {};
   let details: OwnershipMap = {};
+  let coinYears: CoinYearsMap = {};
   let ownedHere = 0;
   let isGuest = true;
   try {
@@ -62,6 +62,7 @@ export default async function PaesePage({
       const fetched = await fetchOwnership(supabase, user.id);
       collection = fetched.quantities;
       details = fetched.details;
+      coinYears = await fetchYears(supabase, user.id);
       for (const id of Object.keys(collection)) {
         if (id.startsWith(`${country}-`)) ownedHere += 1;
       }
@@ -131,6 +132,7 @@ export default async function PaesePage({
         coins={coins}
         initialCollection={collection}
         initialDetails={details}
+        initialYears={coinYears}
         isGuest={isGuest}
       />
 

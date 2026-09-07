@@ -2,11 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership, isMissingColumnError, MISSING_COLUMNS_MESSAGE } from "@/lib/collection";
+import { fetchOwnership, fetchYears, isMissingColumnError, isMissingTableError, MISSING_COLUMNS_MESSAGE, MISSING_YEARS_TABLE_MESSAGE } from "@/lib/collection";
 import { isValidCountry } from "@/lib/catalog";
 import {
   COLLECTION_LIMITS,
   isGrade,
+  type CoinYearsMap,
   type CollectionMap,
   type Grade,
   type Ownership,
@@ -143,6 +144,88 @@ export async function decrementCoin(
 export async function getMyOwnership(): Promise<OwnershipMap> {
   const { supabase, userId } = await requireUserId();
   return (await fetchOwnership(supabase, userId)).details;
+}
+
+/** Anni posseduti per disegno (`coin_id -> { year: qty }`). */
+export async function getMyYears(): Promise<CoinYearsMap> {
+  const { supabase, userId } = await requireUserId();
+  return fetchYears(supabase, userId);
+}
+
+export interface ToggleYearResult {
+  coinId: string;
+  year: number;
+  /** Quantità dell'anno dopo il toggle (0 = rimosso, 1 = posseduto). */
+  quantity: number;
+  /** Anni posseduti totali del disegno (per sync ottimistica del badge). */
+  ownedYears: number;
+}
+
+/**
+ * Spunta / deseleziona un anno di un disegno divisionale.
+ * La riga principale (`user_collection`) viene sincronizzata dal server:
+ * quantità = numero di anni posseduti, così badge, filtri, statistiche e
+ * dashboard restano coerenti senza lavoro extra nella UI.
+ */
+export async function toggleCoinYear(
+  coinId: string,
+  year: number
+): Promise<ToggleYearResult> {
+  const cleanYear = Math.floor(year);
+  if (!Number.isFinite(cleanYear) || cleanYear < 1999 || cleanYear > 2100) {
+    throw new Error("INVALID_YEAR");
+  }
+  const { supabase, userId } = await requireUserId();
+
+  const current = await supabase
+    .from("user_collection_years")
+    .select("quantity")
+    .eq("user_id", userId)
+    .eq("coin_id", coinId)
+    .eq("year", cleanYear)
+    .maybeSingle();
+  if (current.error) {
+    if (isMissingTableError(current.error)) {
+      throw new Error(MISSING_YEARS_TABLE_MESSAGE);
+    }
+    throw new Error(current.error.message);
+  }
+
+  let quantity: number;
+  if ((current.data?.quantity ?? 0) > 0) {
+    const removed = await supabase
+      .from("user_collection_years")
+      .delete()
+      .eq("user_id", userId)
+      .eq("coin_id", coinId)
+      .eq("year", cleanYear);
+    if (removed.error) throw new Error(removed.error.message);
+    quantity = 0;
+  } else {
+    const added = await supabase.from("user_collection_years").upsert(
+      { user_id: userId, coin_id: coinId, year: cleanYear, quantity: 1 },
+      { onConflict: "user_id,coin_id,year" }
+    );
+    if (added.error) {
+      if (isMissingTableError(added.error)) {
+        throw new Error(MISSING_YEARS_TABLE_MESSAGE);
+      }
+      throw new Error(added.error.message);
+    }
+    quantity = 1;
+  }
+
+  // Sync riga principale = anni posseduti (include revalidate dei path).
+  const owned = await supabase
+    .from("user_collection_years")
+    .select("coin_id")
+    .eq("user_id", userId)
+    .eq("coin_id", coinId);
+  if (owned.error) throw new Error(owned.error.message);
+  const ownedYears = owned.data?.length ?? 0;
+  await applyQuantity(supabase, userId, coinId, ownedYears);
+
+  return { coinId, year: cleanYear, quantity, ownedYears };
 }
 
 function cleanGrade(grade: Grade | null | undefined): Grade | null {

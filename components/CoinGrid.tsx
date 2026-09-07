@@ -7,11 +7,13 @@ import { DENOMINATIONS, type CatalogCoin } from "@/lib/catalog";
 import {
   decrementCoin,
   incrementCoin,
+  toggleCoinYear,
   updateCoinDetails,
 } from "@/app/actions/collection";
 import {
   COLLECTION_LIMITS,
   GRADES,
+  type CoinYearsMap,
   type CollectionMap,
   type Grade,
   type Ownership,
@@ -23,6 +25,8 @@ interface Props {
   initialCollection: CollectionMap;
   /** Dettagli (grado + note) per le monete possedute; {} per guest. */
   initialDetails?: OwnershipMap;
+  /** Anni posseduti per disegno (`coin_id -> { year: qty }`); {} per guest. */
+  initialYears?: CoinYearsMap;
   isGuest: boolean;
   /** Mostra la barra di ricerca/filtri/ordinamento (default true). */
   showFilters?: boolean;
@@ -62,6 +66,7 @@ export default function CoinGrid({
   coins,
   initialCollection,
   initialDetails = {},
+  initialYears = {},
   isGuest,
   showFilters = true,
 }: Props) {
@@ -207,6 +212,16 @@ export default function CoinGrid({
     });
   };
 
+  /**
+   * Sync ottimistica del badge xN quando si spuntano gli anni: il server
+   * allinea la riga principale agli anni posseduti, qui lo anticipiamo.
+   */
+  const syncMainQty = (coinId: string, qty: number): void => {
+    startTransition(() => {
+      addOptimistic({ id: coinId, qty });
+    });
+  };
+
   const selectClass =
     "rounded-xl border border-zinc-300 bg-white px-2 py-1.5 text-xs font-medium outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900";
 
@@ -321,6 +336,8 @@ export default function CoinGrid({
           const qty = optimistic[coin.id] ?? 0;
           const owned = qty > 0;
           const ownership = details[coin.id] ?? null;
+          // Divisionali multi-anno: possesso per anno (chip) invece di +/−.
+          const isMultiYear = !coin.isCommemorative && coin.years.length > 1;
           return (
             <article
               key={coin.id}
@@ -389,6 +406,20 @@ export default function CoinGrid({
                   </p>
                 )}
 
+                {isMultiYear ? (
+                  <YearChips
+                    coin={coin}
+                    initial={initialYears[coin.id] ?? {}}
+                    isGuest={isGuest}
+                    onGuest={handleGuest}
+                    onSync={(count) => syncMainQty(coin.id, count)}
+                    onError={(detail) =>
+                      setError(
+                        `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
+                      )
+                    }
+                  />
+                ) : (
                 <div className="mt-2 flex items-center justify-between">
                   <button
                     type="button"
@@ -419,6 +450,7 @@ export default function CoinGrid({
                     +
                   </button>
                 </div>
+                )}
 
                 {owned && !isGuest && (
                   <CoinDetailsEditor
@@ -456,6 +488,113 @@ function MetalLegend({ swatch, label }: { swatch: string; label: string }) {
       />
       {label}
     </span>
+  );
+}
+
+interface YearChipUpdate {
+  year: number;
+  qty: number;
+}
+
+function applyYearOptimistic(
+  state: Record<number, number>,
+  update: YearChipUpdate
+): Record<number, number> {
+  const next = { ...state };
+  if (update.qty <= 0) delete next[update.year];
+  else next[update.year] = update.qty;
+  return next;
+}
+
+/**
+ * Caselle anni di un disegno divisionale: tocca un anno per segnarlo
+ * posseduto/mancante. Il badge xN della card viene sincronizzato dal padre
+ * (la riga principale sul server = anni posseduti).
+ */
+function YearChips({
+  coin,
+  initial,
+  isGuest,
+  onGuest,
+  onSync,
+  onError,
+}: {
+  coin: CatalogCoin;
+  initial: Record<number, number>;
+  isGuest: boolean;
+  onGuest: () => void;
+  onSync: (ownedCount: number) => void;
+  onError: (detail: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [optimistic, addOptimistic] = useOptimistic<
+    Record<number, number>,
+    YearChipUpdate
+  >(initial, applyYearOptimistic);
+
+  const ownedCount = Object.keys(optimistic).length;
+  const total = coin.years.length;
+
+  const toggle = (year: number): void => {
+    if (isGuest) {
+      onGuest();
+      return;
+    }
+    const next = (optimistic[year] ?? 0) > 0 ? 0 : 1;
+    const newCount = ownedCount + (next > 0 ? 1 : -1);
+    onSync(Math.max(0, newCount));
+    startTransition(async () => {
+      addOptimistic({ year, qty: next });
+      try {
+        await toggleCoinYear(coin.id, year);
+      } catch (e) {
+        onSync(ownedCount);
+        onError(e instanceof Error ? e.message : "Errore sconosciuto");
+      }
+    });
+  };
+
+  return (
+    <div className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between text-[11px] font-semibold text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+      >
+        <span className="tabular-nums">
+          Anni: {ownedCount}/{total}
+        </span>
+        <span>{open ? "▾ Nascondi" : "▸ Spunta gli anni"}</span>
+      </button>
+      {open && (
+        <div className="mt-1.5 flex flex-wrap gap-1" aria-busy={pending}>
+          {coin.years.map((y) => {
+            const has = (optimistic[y] ?? 0) > 0;
+            return (
+              <button
+                key={y}
+                type="button"
+                onClick={() => toggle(y)}
+                aria-pressed={has}
+                aria-label={`${has ? "Rimuovi" : "Aggiungi"} anno ${y}`}
+                className={`rounded-lg px-1.5 py-0.5 text-[11px] font-semibold tabular-nums transition ${
+                  has
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "bg-zinc-200 text-zinc-500 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+                }`}
+              >
+                {y}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <p className="mt-1 text-[10px] text-zinc-400">
+        Tocca gli anni che possiedi di questo disegno.
+      </p>
+    </div>
   );
 }
 

@@ -35,6 +35,14 @@ export interface CatalogCoin extends CoinSource {
   isEnriched: boolean;
   /** Metallo/colore reale del taglio (come le monete vere). */
   metal: MetalInfo;
+  /**
+   * Anni coperti da questo disegno, per la collezione "tutti gli anni".
+   * - Divisionali: tutti gli anni in cui il disegno è circolato
+   *   (dal primo conio del paese — o dalla data del disegno se successiva —
+   *   fino all'anno corrente, esclusi gli anni dei disegni successivi).
+   * - Commemorativi: [anno di emissione] (pezzo unico annuale).
+   */
+  years: number[];
 }
 
 /** Metalli degli euro: rame (1-2-5 cent), oro nordico (10-20-50 cent), bimetalliche (1-2 €). */
@@ -428,7 +436,50 @@ function toCatalogCoin(coin: CoinSource): CatalogCoin {
     isCommemorative: coin.type === "commemorative",
     isEnriched: Boolean(rule),
     metal: denominationMetal(coin.denomination),
+    years: [coin.year],
   };
+}
+
+/**
+ * Primo anno di circolazione dell'euro per paese (i disegni datati prima,
+ * es. 1999, coprono comunque da qui). L'anno corrente è il limite superiore.
+ */
+export const CIRCULATION_START: Record<CountryCode, number> = {
+  at: 2002, be: 2002, de: 2002, es: 2002, fi: 2002, fr: 2002, gr: 2002,
+  ie: 2002, it: 2002, lu: 2002, mc: 2002, nl: 2002, pt: 2002, sm: 2002,
+  va: 2002, si: 2007, cy: 2008, mt: 2008, sk: 2009, ee: 2011, lv: 2014,
+  ad: 2014, lt: 2015, hr: 2023, bg: 2026,
+};
+
+/**
+ * Assegna a ogni divisionale gli anni del suo disegno: raggruppa per
+ * (paese, taglio), ordina i disegni per anno e ritaglia ogni intervallo
+ * [max(disegno, primoConio) .. min(disegnoSuccessivo - 1, annoCorrente)].
+ * Mutazione intenzionale su array appena creato da getCatalog() (puro).
+ */
+function assignDesignYears(coins: CatalogCoin[]): void {
+  const now = new Date().getFullYear();
+  const groups = new Map<string, CatalogCoin[]>();
+  for (const coin of coins) {
+    if (coin.isCommemorative) continue; // years già = [anno]
+    const key = `${coin.country}|${coin.denomination}`;
+    const list = groups.get(key);
+    if (list) list.push(coin);
+    else groups.set(key, [coin]);
+  }
+  for (const list of groups.values()) {
+    list.sort((a, b) => a.year - b.year);
+    list.forEach((design, i) => {
+      const start = Math.max(
+        design.year,
+        CIRCULATION_START[design.country] ?? design.year
+      );
+      const end = Math.min((list[i + 1]?.year ?? now + 1) - 1, now);
+      const years: number[] = [];
+      for (let y = start; y <= end; y++) years.push(y);
+      design.years = years;
+    });
+  }
 }
 
 /**
@@ -441,7 +492,9 @@ function toCatalogCoin(coin: CoinSource): CatalogCoin {
  * (`generateStaticParams` + `revalidate`), senza bisogno di singleton.
  */
 export function getCatalog(): CatalogCoin[] {
-  return getAllCoins().map(toCatalogCoin);
+  const catalog = getAllCoins().map(toCatalogCoin);
+  assignDesignYears(catalog);
+  return catalog;
 }
 
 export interface CountrySummary {

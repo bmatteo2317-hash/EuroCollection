@@ -95,6 +95,33 @@ export function toCollectionMap(ownership: OwnershipMap): CollectionMap {
   return map;
 }
 
+/**
+ * Anni posseduti per disegno: `coin_id -> { [year]: quantity }`.
+ * Le chiavi anno arrivano dal DB come interi; in JS diventano stringhe,
+ * ma l'accesso con numero (`map[id]?.[2024]`) funziona comunque.
+ */
+export type CoinYearsMap = Record<string, Record<number, number>>;
+
+/** Quantità posseduta di uno specifico anno di un disegno (0 se mancante). */
+export function getYearQuantity(
+  years: CoinYearsMap,
+  coinId: string,
+  year: number
+): number {
+  return years[coinId]?.[year] ?? 0;
+}
+
+/** Anni posseduti (ordinati) di un disegno. */
+export function getOwnedYears(
+  years: CoinYearsMap,
+  coinId: string
+): number[] {
+  return Object.entries(years[coinId] ?? {})
+    .filter(([, qty]) => qty > 0)
+    .map(([y]) => Number(y))
+    .sort((a, b) => a - b);
+}
+
 /** Calcola le statistiche a partire da catalogo totale + mappa collezione. */
 export function buildCollectionStats(
   collection: CollectionMap,
