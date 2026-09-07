@@ -292,6 +292,17 @@ export default function CoinGrid({
           <p className="text-[11px] text-zinc-400" aria-live="polite">
             {visible.length} di {coins.length} monete mostrate
           </p>
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-400">
+            <MetalLegend swatch="#b87333" label="Rame · 1, 2, 5 cent" />
+            <MetalLegend
+              swatch="#c9a227"
+              label="Oro nordico · 10, 20, 50 cent"
+            />
+            <MetalLegend
+              swatch="linear-gradient(135deg, #c9a227 50%, #c0c4cc 50%)"
+              label="Bimetalliche · 1 €, 2 €"
+            />
+          </p>
         </div>
       )}
 
@@ -351,14 +362,21 @@ export default function CoinGrid({
               </div>
 
               <div className="flex flex-1 flex-col gap-1 p-3">
-                <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                <h3 className="flex items-center gap-1.5 text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                  <span
+                    aria-hidden="true"
+                    title={`Metallo: ${coin.metal.label}`}
+                    style={{ background: coin.metal.swatch }}
+                    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full shadow-sm"
+                  />
                   {coin.faceValue} · {coin.year}
                 </h3>
                 <p className="line-clamp-2 min-h-8 text-xs leading-4 text-zinc-500 dark:text-zinc-400">
                   {coin.description}
                 </p>
                 <p className="text-[11px] text-zinc-400">
-                  {coin.mintage ? `Tiratura: ${coin.mintage}` : "Tiratura: n/d"}
+                  {coin.metal.label}
+                  {coin.mintage ? ` · Tiratura: ${coin.mintage}` : " · Tiratura: n/d"}
                 </p>
                 {owned && ownership?.notes && (
                   <p
@@ -423,6 +441,19 @@ export default function CoinGrid({
         </p>
       )}
     </div>
+  );
+}
+
+function MetalLegend({ swatch, label }: { swatch: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span
+        aria-hidden="true"
+        style={{ background: swatch }}
+        className="inline-block h-2.5 w-2.5 rounded-full shadow-sm"
+      />
+      {label}
+    </span>
   );
 }
 

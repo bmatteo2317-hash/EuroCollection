@@ -33,6 +33,38 @@ export interface CatalogCoin extends CoinSource {
   isCommemorative: boolean;
   /** true se la descrizione è curata a mano, false se generata. */
   isEnriched: boolean;
+  /** Metallo/colore reale del taglio (come le monete vere). */
+  metal: MetalInfo;
+}
+
+/** Metalli degli euro: rame (1-2-5 cent), oro nordico (10-20-50 cent), bimetalliche (1-2 €). */
+export type MetalKey = "copper" | "gold" | "bimetal";
+
+export interface MetalInfo {
+  key: MetalKey;
+  /** Etichetta numismatica: "Rame" / "Oro nordico" / "Bimetallica". */
+  label: string;
+  /** Valore CSS per il pallino colore (tinta unita o gradiente bimetallico). */
+  swatch: string;
+}
+
+export function denominationMetal(d: Denomination): MetalInfo {
+  switch (d) {
+    case "1cent":
+    case "2cent":
+    case "5cent":
+      return { key: "copper", label: "Rame", swatch: "#b87333" };
+    case "10cent":
+    case "20cent":
+    case "50cent":
+      return { key: "gold", label: "Oro nordico", swatch: "#c9a227" };
+    default:
+      return {
+        key: "bimetal",
+        label: "Bimetallica",
+        swatch: "linear-gradient(135deg, #c9a227 50%, #c0c4cc 50%)",
+      };
+  }
 }
 
 // NOTA SUL PACKAGE: `@euro-coins/source` fornisce SOLO
@@ -395,6 +427,7 @@ function toCatalogCoin(coin: CoinSource): CatalogCoin {
     mintage: rule?.mintage ?? null,
     isCommemorative: coin.type === "commemorative",
     isEnriched: Boolean(rule),
+    metal: denominationMetal(coin.denomination),
   };
 }
 
