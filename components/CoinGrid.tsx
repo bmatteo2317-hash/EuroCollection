@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useMemo, useOptimistic, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { DENOMINATIONS, type CatalogCoin } from "@/lib/catalog";
 import {
   decrementCoin,
@@ -32,23 +32,39 @@ interface Props {
   showFilters?: boolean;
 }
 
-interface OptimisticUpdate {
-  id: string;
-  qty: number;
-}
-
 type KindFilter = "all" | "regular" | "commemorative";
 type PossessionFilter = "all" | "owned" | "missing" | "duplicates";
 type SortKey = "year-desc" | "year-asc" | "value-desc" | "value-asc";
 
-function applyOptimistic(
+/** Imposta/cancella una quantità nella mappa (qty <= 0 → rimuove la chiave). */
+function withQuantity(
   state: CollectionMap,
-  update: OptimisticUpdate
+  id: string,
+  qty: number
 ): CollectionMap {
-  const next: CollectionMap = { ...state };
-  if (update.qty <= 0) delete next[update.id];
-  else next[update.id] = update.qty;
+  const next = { ...state };
+  if (qty <= 0) delete next[id];
+  else next[id] = qty;
   return next;
+}
+
+/** Imposta/cancella un anno nella mappa anni di un disegno. */
+function withYear(
+  state: CoinYearsMap,
+  coinId: string,
+  year: number,
+  qty: number
+): CoinYearsMap {
+  const perCoin = { ...(state[coinId] ?? {}) };
+  if (qty <= 0) delete perCoin[year];
+  else perCoin[year] = qty;
+  return { ...state, [coinId]: perCoin };
+}
+
+/** Anni posseduti (> 0) di un disegno. */
+function countOwnedYears(perCoin: Record<number, number> | undefined): number {
+  if (!perCoin) return 0;
+  return Object.values(perCoin).filter((q) => q > 0).length;
 }
 
 function clampQty(qty: number): number {
@@ -73,10 +89,13 @@ export default function CoinGrid({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [optimistic, addOptimistic] = useOptimistic<
-    CollectionMap,
-    OptimisticUpdate
-  >(initialCollection, applyOptimistic);
+  // Stato LOCALE persistente (fonte di verità della UI dopo il mount):
+  // a differenza di useOptimistic non si ribalta mai allo stato iniziale,
+  // quindi ciò che il server conferma resta visibile. Solo in caso di
+  // errore si ripristina il valore precedente.
+  const [quantities, setQuantities] =
+    useState<CollectionMap>(initialCollection);
+  const [yearsMap, setYearsMap] = useState<CoinYearsMap>(initialYears);
   const [details, setDetails] = useState<OwnershipMap>(initialDetails);
 
   // ---- Filtri di ricerca e ordinamento (istantanei, solo client) ----
@@ -98,7 +117,7 @@ export default function CoinGrid({
       if (kind === "regular" && coin.isCommemorative) return false;
       if (kind === "commemorative" && !coin.isCommemorative) return false;
       if (year !== "all" && coin.year !== Number(year)) return false;
-      const qty = optimistic[coin.id] ?? 0;
+      const qty = quantities[coin.id] ?? 0;
       if (possession === "owned" && qty <= 0) return false;
       if (possession === "missing" && qty > 0) return false;
       if (possession === "duplicates" && qty <= 1) return false;
@@ -126,7 +145,7 @@ export default function CoinGrid({
         break;
     }
     return sorted;
-  }, [coins, query, kind, possession, year, sort, optimistic]);
+  }, [coins, query, kind, possession, year, sort, quantities]);
 
   const hasActiveFilters =
     query.trim() !== "" ||
@@ -158,26 +177,64 @@ export default function CoinGrid({
       handleGuest();
       return;
     }
-    const current = optimistic[coin.id] ?? 0;
+    const current = quantities[coin.id] ?? 0;
     const next = clampQty(current + delta);
     if (next === current) return;
     setError(null);
 
-    // Feedback immediato: l'update ottimistico vive dentro la transition.
-    // Se la Server Action fallisce, `useOptimistic` effettua il rollback
-    // automatico allo stato base (`initialCollection` dal Server Component);
-    // mostriamo comunque un messaggio di errore non bloccante.
+    // Feedback immediato + persistenza: lo stato locale resta sul nuovo
+    // valore anche a transizione finita; solo in caso di errore si torna
+    // indietro. A successo si riallinea con la verità del server.
+    setQuantities((prev) => withQuantity(prev, coin.id, next));
     startTransition(async () => {
-      addOptimistic({ id: coin.id, qty: next });
       try {
-        if (delta > 0) await incrementCoin(coin.id);
-        else await decrementCoin(coin.id);
+        const res =
+          delta > 0
+            ? await incrementCoin(coin.id)
+            : await decrementCoin(coin.id);
+        setQuantities((prev) => withQuantity(prev, coin.id, res.quantity));
       } catch (e) {
+        setQuantities((prev) => withQuantity(prev, coin.id, current));
         const detail = e instanceof Error ? e.message : "Errore sconosciuto";
         setError(
           detail === "UNAUTHENTICATED"
             ? "Sessione scaduta: accedi di nuovo per salvare la collezione."
             : `Operazione fallita su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
+        );
+      }
+    });
+  };
+
+  const toggleYear = (coin: CatalogCoin, year: number): void => {
+    if (isGuest) {
+      handleGuest();
+      return;
+    }
+    setError(null);
+    const prevYearQty = yearsMap[coin.id]?.[year] ?? 0;
+    const nextYearQty = prevYearQty > 0 ? 0 : 1;
+    const prevCount = countOwnedYears(yearsMap[coin.id]);
+    const prevMainQty = quantities[coin.id] ?? 0;
+
+    setYearsMap((prev) => withYear(prev, coin.id, year, nextYearQty));
+    setQuantities((prev) =>
+      withQuantity(prev, coin.id, prevCount + (nextYearQty > 0 ? 1 : -1))
+    );
+    startTransition(async () => {
+      try {
+        const res = await toggleCoinYear(coin.id, year);
+        setYearsMap((prev) =>
+          withYear(prev, coin.id, res.year, res.quantity)
+        );
+        setQuantities((prev) =>
+          withQuantity(prev, coin.id, res.ownedYears)
+        );
+      } catch (e) {
+        setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
+        setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
+        const detail = e instanceof Error ? e.message : "Errore sconosciuto";
+        setError(
+          `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
         );
       }
     });
@@ -209,16 +266,6 @@ export default function CoinGrid({
             : `Salvataggio dettagli fallito su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
         );
       }
-    });
-  };
-
-  /**
-   * Sync ottimistica del badge xN quando si spuntano gli anni: il server
-   * allinea la riga principale agli anni posseduti, qui lo anticipiamo.
-   */
-  const syncMainQty = (coinId: string, qty: number): void => {
-    startTransition(() => {
-      addOptimistic({ id: coinId, qty });
     });
   };
 
@@ -333,7 +380,7 @@ export default function CoinGrid({
       )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {visible.map((coin) => {
-          const qty = optimistic[coin.id] ?? 0;
+          const qty = quantities[coin.id] ?? 0;
           const owned = qty > 0;
           const ownership = details[coin.id] ?? null;
           // Divisionali multi-anno: possesso per anno (chip) invece di +/−.
@@ -343,7 +390,7 @@ export default function CoinGrid({
               key={coin.id}
               className={`group relative flex flex-col overflow-hidden rounded-2xl border bg-white shadow-sm transition-all hover:shadow-md dark:bg-zinc-900 ${
                 owned
-                  ? "border-emerald-300 ring-1 ring-emerald-200 dark:border-emerald-800"
+                  ? "border-white shadow-md ring-1 ring-white dark:border-white"
                   : "border-zinc-200 dark:border-zinc-800"
               }`}
             >
@@ -353,11 +400,7 @@ export default function CoinGrid({
                   alt={`${coin.faceValue} ${coin.countryName} ${coin.year}`}
                   fill
                   sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
-                  className={`object-contain p-2 transition-all duration-300 ${
-                    owned
-                      ? "opacity-100 saturate-100"
-                      : "opacity-50 saturate-0 group-hover:opacity-75"
-                  }`}
+                  className="object-contain p-2 transition-transform duration-300 group-hover:scale-[1.04]"
                   loading="lazy"
                 />
                 {owned && (
@@ -409,15 +452,10 @@ export default function CoinGrid({
                 {isMultiYear ? (
                   <YearChips
                     coin={coin}
-                    initial={initialYears[coin.id] ?? {}}
+                    ownedYears={yearsMap[coin.id] ?? {}}
                     isGuest={isGuest}
                     onGuest={handleGuest}
-                    onSync={(count) => syncMainQty(coin.id, count)}
-                    onError={(detail) =>
-                      setError(
-                        `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
-                      )
-                    }
+                    onToggle={(year) => toggleYear(coin, year)}
                   />
                 ) : (
                 <div className="mt-2 flex items-center justify-between">
@@ -491,68 +529,34 @@ function MetalLegend({ swatch, label }: { swatch: string; label: string }) {
   );
 }
 
-interface YearChipUpdate {
-  year: number;
-  qty: number;
-}
-
-function applyYearOptimistic(
-  state: Record<number, number>,
-  update: YearChipUpdate
-): Record<number, number> {
-  const next = { ...state };
-  if (update.qty <= 0) delete next[update.year];
-  else next[update.year] = update.qty;
-  return next;
-}
-
 /**
  * Caselle anni di un disegno divisionale: tocca un anno per segnarlo
- * posseduto/mancante. Il badge xN della card viene sincronizzato dal padre
- * (la riga principale sul server = anni posseduti).
+ * posseduto/mancante. Puramente presentazionale: lo stato vive nel padre
+ * (resta visibile anche a operazione conclusa) e il toggle nel padre.
  */
 function YearChips({
   coin,
-  initial,
+  ownedYears,
   isGuest,
   onGuest,
-  onSync,
-  onError,
+  onToggle,
 }: {
   coin: CatalogCoin;
-  initial: Record<number, number>;
+  ownedYears: Record<number, number>;
   isGuest: boolean;
   onGuest: () => void;
-  onSync: (ownedCount: number) => void;
-  onError: (detail: string) => void;
+  onToggle: (year: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pending, startTransition] = useTransition();
-  const [optimistic, addOptimistic] = useOptimistic<
-    Record<number, number>,
-    YearChipUpdate
-  >(initial, applyYearOptimistic);
-
-  const ownedCount = Object.keys(optimistic).length;
+  const ownedCount = countOwnedYears(ownedYears);
   const total = coin.years.length;
 
-  const toggle = (year: number): void => {
+  const press = (year: number): void => {
     if (isGuest) {
       onGuest();
       return;
     }
-    const next = (optimistic[year] ?? 0) > 0 ? 0 : 1;
-    const newCount = ownedCount + (next > 0 ? 1 : -1);
-    onSync(Math.max(0, newCount));
-    startTransition(async () => {
-      addOptimistic({ year, qty: next });
-      try {
-        await toggleCoinYear(coin.id, year);
-      } catch (e) {
-        onSync(ownedCount);
-        onError(e instanceof Error ? e.message : "Errore sconosciuto");
-      }
-    });
+    onToggle(year);
   };
 
   return (
@@ -569,14 +573,14 @@ function YearChips({
         <span>{open ? "▾ Nascondi" : "▸ Spunta gli anni"}</span>
       </button>
       {open && (
-        <div className="mt-1.5 flex flex-wrap gap-1" aria-busy={pending}>
+        <div className="mt-1.5 flex flex-wrap gap-1">
           {coin.years.map((y) => {
-            const has = (optimistic[y] ?? 0) > 0;
+            const has = (ownedYears[y] ?? 0) > 0;
             return (
               <button
                 key={y}
                 type="button"
-                onClick={() => toggle(y)}
+                onClick={() => press(y)}
                 aria-pressed={has}
                 aria-label={`${has ? "Rimuovi" : "Aggiungi"} anno ${y}`}
                 className={`rounded-lg px-1.5 py-0.5 text-[11px] font-semibold tabular-nums transition ${
