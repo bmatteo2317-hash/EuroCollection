@@ -9,8 +9,10 @@ import {
   isValidCountry,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
+import { fetchOwnership } from "@/lib/collection";
 import CoinGrid from "@/components/CoinGrid";
 import type { CollectionMap } from "@/lib/types";
+import type { OwnershipMap } from "@/lib/types";
 
 // Le pagine paese mostrano il possesso dell'utente loggato (cookies via
 // Supabase): rendering dinamico per-request. `generateStaticParams` resta
@@ -48,6 +50,7 @@ export default async function PaesePage({
   const comm = coins.filter((c) => c.isCommemorative).length;
 
   let collection: CollectionMap = {};
+  let details: OwnershipMap = {};
   let ownedHere = 0;
   let isGuest = true;
   try {
@@ -57,19 +60,15 @@ export default async function PaesePage({
     } = await supabase.auth.getUser();
     if (user) {
       isGuest = false;
-      const { data } = await supabase
-        .from("user_collection")
-        .select("coin_id, quantity")
-        .eq("user_id", user.id);
-      for (const row of data ?? []) {
-        if (row.quantity > 0) {
-          collection[row.coin_id] = row.quantity;
-          if (row.coin_id.startsWith(`${country}-`)) ownedHere += 1;
-        }
+      const fetched = await fetchOwnership(supabase, user.id);
+      collection = fetched.quantities;
+      details = fetched.details;
+      for (const id of Object.keys(collection)) {
+        if (id.startsWith(`${country}-`)) ownedHere += 1;
       }
     }
   } catch {
-    // Build senza env: pagina statica comunque consultabile
+    // Build senza env: pagina comunque consultabile da guest
   }
 
   const pct = coins.length
@@ -132,6 +131,7 @@ export default async function PaesePage({
       <CoinGrid
         coins={coins}
         initialCollection={collection}
+        initialDetails={details}
         isGuest={isGuest}
       />
 

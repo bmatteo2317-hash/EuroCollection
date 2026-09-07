@@ -5,10 +5,12 @@ import {
   getTotalCount,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
+import { fetchOwnership } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CountryExplorer from "@/components/CountryExplorer";
 import CoinGrid from "@/components/CoinGrid";
 import type { CollectionMap } from "@/lib/types";
+import type { OwnershipMap } from "@/lib/types";
 
 // Pagina personalizzata (mostra il progresso dell'utente loggato):
 // deve essere renderizzata dinamicamente, non prerenderizzata in build
@@ -24,6 +26,7 @@ export default async function Home() {
 
   // Collezione utente (se loggato) per statistiche + UI ottimistica in home
   let collection: CollectionMap = {};
+  let details: OwnershipMap = {};
   let owned = 0;
   let userEmail: string | null = null;
   try {
@@ -33,16 +36,10 @@ export default async function Home() {
     } = await supabase.auth.getUser();
     if (user) {
       userEmail = user.email ?? null;
-      const { data } = await supabase
-        .from("user_collection")
-        .select("coin_id, quantity")
-        .eq("user_id", user.id);
-      for (const row of data ?? []) {
-        if (row.quantity > 0) {
-          collection[row.coin_id] = row.quantity;
-          owned += 1;
-        }
-      }
+      const fetched = await fetchOwnership(supabase, user.id);
+      collection = fetched.quantities;
+      details = fetched.details;
+      owned = Object.keys(collection).length;
     }
   } catch {
     // Env Supabase assenti in build: la home resta consultabile da guest
@@ -112,6 +109,7 @@ export default async function Home() {
         <CoinGrid
           coins={commemoratives}
           initialCollection={collection}
+          initialDetails={details}
           isGuest={!userEmail}
         />
       </section>

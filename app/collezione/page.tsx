@@ -5,7 +5,9 @@ import {
   getTotalCount,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
+import { fetchOwnership } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
+import CompletionDonut from "@/components/CompletionDonut";
 import CoinGrid from "@/components/CoinGrid";
 
 // Pagina privata: mai prerenderizzata in build (usa cookies() + redirect).
@@ -29,15 +31,10 @@ export default async function CollezionePage() {
   }
   if (!userId || !supabase) redirect("/login");
 
-  const { data } = await supabase
-    .from("user_collection")
-    .select("coin_id, quantity")
-    .eq("user_id", userId);
-
-  const collection: Record<string, number> = {};
-  for (const row of data ?? []) {
-    if (row.quantity > 0) collection[row.coin_id] = row.quantity;
-  }
+  const { quantities: collection, details } = await fetchOwnership(
+    supabase,
+    userId
+  );
 
   const catalog = getCatalog();
   const total = getTotalCount();
@@ -45,24 +42,42 @@ export default async function CollezionePage() {
   const ownedCoins = catalog.filter((c) => ownedIds.has(c.id));
   const owned = ownedCoins.length;
   const pieces = ownedCoins.reduce((s, c) => s + (collection[c.id] ?? 0), 0);
-  const byCountry = getCountriesWithCounts().map((c) => ({
-    ...c,
-    owned: catalog.filter(
-      (coin) => coin.country === c.code && ownedIds.has(coin.id)
-    ).length,
-  }));
+  const duplicates = ownedCoins.filter((c) => (collection[c.id] ?? 0) > 1).length;
+
+  // Ripartizione divisionali vs commemorativi (possedute e totali).
+  const ownedRegular = ownedCoins.filter((c) => !c.isCommemorative).length;
+  const ownedComm = owned - ownedRegular;
+  const totalComm = catalog.filter((c) => c.isCommemorative).length;
+  const totalRegular = total - totalComm;
+
+  const byCountry = getCountriesWithCounts().map((c) => {
+    const countryCoins = catalog.filter((coin) => coin.country === c.code);
+    const ownedCountry = countryCoins.filter((coin) => ownedIds.has(coin.id));
+    return {
+      ...c,
+      owned: ownedCountry.length,
+      ownedComm: ownedCountry.filter((coin) => coin.isCommemorative).length,
+    };
+  });
 
   return (
     <div className="flex flex-col gap-8">
       <header>
         <h1 className="text-3xl font-extrabold">La mia collezione</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {userEmail} · {pieces} pezzi totali · {owned} tipi distinti
+          {userEmail} · {pieces} pezzi totali · {owned} tipi distinti ·{" "}
+          {duplicates} doppioni
         </p>
       </header>
 
-      <section className="rounded-3xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+      <section className="grid gap-4 rounded-3xl border border-zinc-200 bg-white p-6 sm:grid-cols-2 dark:border-zinc-800 dark:bg-zinc-900">
         <ProgressCircle owned={owned} total={total} />
+        <CompletionDonut
+          ownedRegular={ownedRegular}
+          ownedComm={ownedComm}
+          totalRegular={totalRegular}
+          totalComm={totalComm}
+        />
       </section>
 
       <section className="flex flex-col gap-3">
@@ -90,6 +105,10 @@ export default async function CollezionePage() {
                     style={{ width: `${pct}%` }}
                   />
                 </div>
+                <p className="mt-1 text-[11px] text-zinc-400">
+                  {c.ownedComm}/{c.commemoratives} commemorativi ·{" "}
+                  {pct.toFixed(1)}% completato
+                </p>
               </a>
             );
           })}
@@ -113,6 +132,7 @@ export default async function CollezionePage() {
           <CoinGrid
             coins={ownedCoins.sort((a, b) => b.year - a.year)}
             initialCollection={collection}
+            initialDetails={details}
             isGuest={false}
           />
         )}
