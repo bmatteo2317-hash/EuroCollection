@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership } from "@/lib/collection";
+import { fetchOwnership, isMissingColumnError, MISSING_COLUMNS_MESSAGE } from "@/lib/collection";
 import { isValidCountry } from "@/lib/catalog";
 import {
   COLLECTION_LIMITS,
@@ -178,12 +178,16 @@ export async function updateCoinDetails(
   if (input.grade !== undefined) patch.grade = cleanGrade(input.grade);
   if (input.notes !== undefined) patch.notes = cleanNotes(input.notes);
   if (Object.keys(patch).length === 0) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("user_collection")
       .select("quantity, grade, notes")
       .eq("user_id", userId)
       .eq("coin_id", coinId)
       .maybeSingle();
+    if (error) {
+      if (isMissingColumnError(error)) throw new Error(MISSING_COLUMNS_MESSAGE);
+      throw new Error(error.message);
+    }
     if (!data || data.quantity <= 0) return { coinId, ownership: null };
     return {
       coinId,
@@ -203,7 +207,10 @@ export async function updateCoinDetails(
     .gt("quantity", 0)
     .select("quantity, grade, notes")
     .maybeSingle();
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isMissingColumnError(error)) throw new Error(MISSING_COLUMNS_MESSAGE);
+    throw new Error(error.message);
+  }
   if (!data) throw new Error("NOT_OWNED");
 
   revalidateCollectionPaths(coinId);
