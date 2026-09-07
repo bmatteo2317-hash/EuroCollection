@@ -12,7 +12,12 @@ import { createClient } from "@/lib/supabase/server";
 import CoinGrid from "@/components/CoinGrid";
 import type { CollectionMap } from "@/lib/types";
 
-// Generazione statica di tutte le pagine paese a build-time
+// Le pagine paese mostrano il possesso dell'utente loggato (cookies via
+// Supabase): rendering dinamico per-request. `generateStaticParams` resta
+// come elenco di rotte valide per metadata/sitemap; l'HTML resta
+// server-rendered (ok per SEO) ma non prerenderizzato in build.
+export const dynamic = "force-dynamic";
+
 export function generateStaticParams() {
   return COUNTRIES.map((country) => ({ country }));
 }

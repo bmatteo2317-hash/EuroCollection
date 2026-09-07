@@ -10,7 +10,11 @@ import CountryExplorer from "@/components/CountryExplorer";
 import CoinGrid from "@/components/CoinGrid";
 import type { CollectionMap } from "@/lib/types";
 
-export const revalidate = 3600; // catalogo statico: ricache ogni ora
+// Pagina personalizzata (mostra il progresso dell'utente loggato):
+// deve essere renderizzata dinamicamente, non prerenderizzata in build
+// (usa cookies() via Supabase). Il catalogo resta economico da calcolare
+// per-request (~879 monete da dati statici del package).
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const countries = getCountriesWithCounts();

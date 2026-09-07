@@ -8,17 +8,31 @@ import { createClient } from "@/lib/supabase/server";
 import ProgressCircle from "@/components/ProgressCircle";
 import CoinGrid from "@/components/CoinGrid";
 
+// Pagina privata: mai prerenderizzata in build (usa cookies() + redirect).
+export const dynamic = "force-dynamic";
+
 export default async function CollezionePage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  // Mai far crashare la rotta se le env mancano: senza utente → /login.
+  // (redirect() lancia un'eccezione interna: va chiamato FUORI dal try.)
+  let userId: string | null = null;
+  let userEmail: string | null = null;
+  let supabase: Awaited<ReturnType<typeof createClient>> | null = null;
+  try {
+    supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    userId = user?.id ?? null;
+    userEmail = user?.email ?? null;
+  } catch {
+    userId = null;
+  }
+  if (!userId || !supabase) redirect("/login");
 
   const { data } = await supabase
     .from("user_collection")
     .select("coin_id, quantity")
-    .eq("user_id", user.id);
+    .eq("user_id", userId);
 
   const collection: Record<string, number> = {};
   for (const row of data ?? []) {
@@ -43,7 +57,7 @@ export default async function CollezionePage() {
       <header>
         <h1 className="text-3xl font-extrabold">La mia collezione</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {user.email} · {pieces} pezzi totali · {owned} tipi distinti
+          {userEmail} · {pieces} pezzi totali · {owned} tipi distinti
         </p>
       </header>
 

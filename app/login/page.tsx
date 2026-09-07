@@ -2,12 +2,19 @@ import { redirect } from "next/navigation";
 import AuthForm from "@/components/AuthForm";
 import { createClient } from "@/lib/supabase/server";
 
+// Legge la sessione via cookies(): rendering dinamico, mai prerender in build.
+export const dynamic = "force-dynamic";
+
 export default async function LoginPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (user) redirect("/collezione");
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) redirect("/collezione");
+  } catch {
+    // Env assenti o sessione illeggibile: mostra comunque il form di login.
+  }
 
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-6 py-10">
