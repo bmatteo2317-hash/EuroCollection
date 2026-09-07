@@ -2,7 +2,6 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
   COUNTRIES,
-  COUNTRY_FLAGS,
   COUNTRY_NAMES,
   getCoinsByCountry,
   getTotalCount,
@@ -11,6 +10,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import { fetchOwnership } from "@/lib/collection";
 import CoinGrid from "@/components/CoinGrid";
+import CountryFlag from "@/components/CountryFlag";
 import type { CollectionMap } from "@/lib/types";
 import type { OwnershipMap } from "@/lib/types";
 
@@ -46,7 +46,6 @@ export default async function PaesePage({
   const coins = getCoinsByCountry(country);
   const total = getTotalCount();
   const name = COUNTRY_NAMES[country];
-  const flag = COUNTRY_FLAGS[country] ?? "🇪🇺";
   const comm = coins.filter((c) => c.isCommemorative).length;
 
   let collection: CollectionMap = {};
@@ -85,7 +84,7 @@ export default async function PaesePage({
       </nav>
 
       <header className="flex flex-wrap items-center gap-4">
-        <span className="text-5xl">{flag}</span>
+        <CountryFlag code={country} name={name} size={64} />
         <div>
           <h1 className="text-3xl font-extrabold">{name}</h1>
           <p className="mt-1 text-sm text-zinc-500">

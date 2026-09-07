@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { CountrySummary } from "@/lib/catalog";
+import CountryFlag from "@/components/CountryFlag";
 
 export default function CountryExplorer({
   countries,
@@ -51,7 +52,9 @@ export default function CountryExplorer({
             href={`/paese/${c.code}`}
             className="group rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900"
           >
-            <div className="text-3xl">{c.flag}</div>
+            <div className="h-8">
+              <CountryFlag code={c.code} name={c.name} size={36} />
+            </div>
             <div className="mt-2 font-bold text-zinc-900 dark:text-zinc-50">
               {c.name}
             </div>

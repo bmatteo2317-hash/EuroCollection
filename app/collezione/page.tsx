@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fetchOwnership } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CompletionDonut from "@/components/CompletionDonut";
+import CountryFlag from "@/components/CountryFlag";
 import CoinGrid from "@/components/CoinGrid";
 
 // Pagina privata: mai prerenderizzata in build (usa cookies() + redirect).
@@ -92,8 +93,9 @@ export default async function CollezionePage() {
                 className="rounded-2xl border border-zinc-200 bg-white p-3 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
               >
                 <div className="flex items-center justify-between text-sm">
-                  <span>
-                    {c.flag} <strong>{c.name}</strong>
+                  <span className="flex items-center gap-2">
+                    <CountryFlag code={c.code} name={c.name} size={22} />
+                    <strong>{c.name}</strong>
                   </span>
                   <span className="tabular-nums text-zinc-500">
                     {c.owned}/{c.total}

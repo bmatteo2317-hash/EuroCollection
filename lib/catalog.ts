@@ -352,6 +352,16 @@ export const COUNTRY_FLAGS: Record<CountryCode, string> = {
   ad: "🇦🇩",
 };
 
+/**
+ * URL dell'immagine della bandiera (flagcdn.com, codici ISO alpha-2
+ * minuscoli: coincidono con i nostri CountryCode, inclusi va/sm/mc/ad).
+ * Le emoji bandiera non esistono su Windows (mostra "IT", "DE", ...),
+ * quindi la UI usa queste immagini con fallback all'emoji.
+ */
+export function countryFlagUrl(code: CountryCode): string {
+  return `https://flagcdn.com/w160/${code}.png`;
+}
+
 export function formatDenomination(d: Denomination): string {
   if (d === "2euro") return "2 €";
   if (d === "1euro") return "1 €";
