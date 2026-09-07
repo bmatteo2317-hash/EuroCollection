@@ -4,16 +4,36 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-export default function AuthForm() {
+export default function AuthForm({
+  initialError = null,
+}: {
+  initialError?: string | null;
+}) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"password" | "magic">("password");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(initialError);
 
   const supabase = createClient();
+
+  /** Traduce gli errori Auth più comuni in messaggi comprensibili. */
+  function friendlyAuthError(e: unknown): string {
+    const raw = e instanceof Error ? e.message : "";
+    if (/email not confirmed/i.test(raw))
+      return "Devi prima confermare l'email: clicca il link che ti abbiamo inviato, poi accedi.";
+    if (/invalid login credentials/i.test(raw))
+      return "Credenziali non valide: controlla email e password.";
+    if (/user already registered/i.test(raw))
+      return "Questo indirizzo è già registrato: accedi invece di registrarti.";
+    if (/over_email_send_rate_limit|too many requests/i.test(raw))
+      return "Troppe email inviate: attendi qualche minuto e riprova.";
+    if (/signup.*disabled|signups not allowed/i.test(raw))
+      return "Le registrazioni sono disabilitate su questo progetto.";
+    return raw || "Operazione non riuscita.";
+  }
 
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
@@ -29,7 +49,7 @@ export default function AuthForm() {
       router.push("/");
       router.refresh();
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Accesso non riuscito.");
+      setErr(friendlyAuthError(e));
     } finally {
       setLoading(false);
     }
@@ -41,11 +61,28 @@ export default function AuthForm() {
     setErr(null);
     setMsg(null);
     try {
-      const { error } = await supabase.auth.signUp({ email, password });
+      // emailRedirectTo è fondamentale: senza, il link di conferma punta al
+      // Site URL di Supabase e non torna mai a /auth/callback (verifica rotta).
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
       if (error) throw error;
-      setMsg("Account creato! Controlla l'email per confermare, poi accedi.");
+      if (data.session) {
+        // "Confirm email" DISABILITATO su Supabase: sessione immediata,
+        // nessuna email di verifica da attendere.
+        router.push("/");
+        router.refresh();
+      } else {
+        setMsg(
+          "Account creato! Controlla l'email e clicca il link di conferma, poi accedi."
+        );
+      }
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Registrazione non riuscita.");
+      setErr(friendlyAuthError(e));
     } finally {
       setLoading(false);
     }

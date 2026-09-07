@@ -5,7 +5,11 @@ import { createClient } from "@/lib/supabase/server";
 // Legge la sessione via cookies(): rendering dinamico, mai prerender in build.
 export const dynamic = "force-dynamic";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
   try {
     const supabase = await createClient();
     const {
@@ -16,6 +20,12 @@ export default async function LoginPage() {
     // Env assenti o sessione illeggibile: mostra comunque il form di login.
   }
 
+  const { error } = await searchParams;
+  const initialError =
+    error === "auth"
+      ? "Link non valido o scaduto: richiedi un nuovo magic link oppure accedi con la password."
+      : null;
+
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-6 py-10">
       <div className="text-center">
@@ -25,7 +35,7 @@ export default async function LoginPage() {
           oppure ricevere un magic link.
         </p>
       </div>
-      <AuthForm />
+      <AuthForm initialError={initialError} />
       <p className="text-xs text-zinc-400">
         Configura l&apos;URL di redirect in Supabase → Authentication → URL
         Configuration: aggiungi{" "}
