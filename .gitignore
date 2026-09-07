@@ -1,0 +1,15 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# env (mai committare i valori reali: su Vercel usa le Environment Variables)
+.env*.local
+
+# vercel
+.vercel
+
+# misc
+*.tsbuildinfo
