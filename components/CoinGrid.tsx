@@ -1,10 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { useOptimistic, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useOptimistic, useState, useTransition } from "react";
 import type { CatalogCoin } from "@/lib/catalog";
 import { decrementCoin, incrementCoin } from "@/app/actions/collection";
-import type { CollectionMap } from "@/lib/types";
+import { COLLECTION_LIMITS, type CollectionMap } from "@/lib/types";
 
 interface Props {
   coins: CatalogCoin[];
@@ -12,42 +13,87 @@ interface Props {
   isGuest: boolean;
 }
 
-export default function CoinGrid({ coins, initialCollection, isGuest }: Props) {
-  const [pending, startTransition] = useTransition();
-  const [optimistic, setOptimistic] = useOptimistic<
-    CollectionMap,
-    { id: string; qty: number }
-  >(initialCollection, (state, { id, qty }) => {
-    const next = { ...state };
-    if (qty <= 0) delete next[id];
-    else next[id] = qty;
-    return next;
-  });
+interface OptimisticUpdate {
+  id: string;
+  qty: number;
+}
 
-  const change = (coin: CatalogCoin, delta: 1 | -1) => {
+function applyOptimistic(
+  state: CollectionMap,
+  update: OptimisticUpdate
+): CollectionMap {
+  const next: CollectionMap = { ...state };
+  if (update.qty <= 0) delete next[update.id];
+  else next[update.id] = update.qty;
+  return next;
+}
+
+function clampQty(qty: number): number {
+  return Math.max(
+    COLLECTION_LIMITS.MIN,
+    Math.min(COLLECTION_LIMITS.MAX, qty)
+  );
+}
+
+export default function CoinGrid({ coins, initialCollection, isGuest }: Props) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [optimistic, addOptimistic] = useOptimistic<
+    CollectionMap,
+    OptimisticUpdate
+  >(initialCollection, applyOptimistic);
+
+  const handleGuest = (): void => {
+    // Reindirizzamento al blocco di login: ancora #login-hint se presente,
+    // altrimenti navigazione a /login.
+    const hint = document.getElementById("login-hint");
+    if (hint) {
+      hint.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      router.push("/login");
+    }
+  };
+
+  const change = (coin: CatalogCoin, delta: 1 | -1): void => {
     if (isGuest) {
-      document
-        .getElementById("login-hint")
-        ?.scrollIntoView({ behavior: "smooth" });
+      handleGuest();
       return;
     }
     const current = optimistic[coin.id] ?? 0;
-    const next = Math.max(0, Math.min(99, current + delta));
-    // 1. UI istantanea (ottimistica) — 2. riconciliazione server in background
-    setOptimistic({ id: coin.id, qty: next });
+    const next = clampQty(current + delta);
+    if (next === current) return;
+    setError(null);
+
+    // Feedback immediato: l'update ottimistico vive dentro la transition.
+    // Se la Server Action fallisce, `useOptimistic` effettua il rollback
+    // automatico allo stato base (`initialCollection` dal Server Component);
+    // mostriamo comunque un messaggio di errore non bloccante.
     startTransition(async () => {
+      addOptimistic({ id: coin.id, qty: next });
       try {
-        if (delta > 0) await incrementCoin(coin.id, current);
-        else await decrementCoin(coin.id, current);
-      } catch {
-        // Rollback se il server fallisce
-        setOptimistic({ id: coin.id, qty: current });
+        if (delta > 0) await incrementCoin(coin.id);
+        else await decrementCoin(coin.id);
+      } catch (e) {
+        setError(
+          e instanceof Error && e.message !== "UNAUTHENTICATED"
+            ? `Aggiornamento non riuscito per ${coin.faceValue} ${coin.year}. Riprova.`
+            : "Sessione scaduta: accedi di nuovo per salvare la collezione."
+        );
       }
     });
   };
 
   return (
-    <div aria-busy={pending}>
+    <div aria-busy={isPending}>
+      {error && (
+        <p
+          role="alert"
+          className="mb-3 rounded-xl bg-red-50 p-3 text-center text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-200"
+        >
+          {error}
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
         {coins.map((coin) => {
           const qty = optimistic[coin.id] ?? 0;
@@ -94,29 +140,33 @@ export default function CoinGrid({ coins, initialCollection, isGuest }: Props) {
                   {coin.description}
                 </p>
                 <p className="text-[11px] text-zinc-400">
-                  {coin.mintage
-                    ? `Tiratura: ${coin.mintage}`
-                    : "Tiratura: n/d"}
+                  {coin.mintage ? `Tiratura: ${coin.mintage}` : "Tiratura: n/d"}
                 </p>
 
                 <div className="mt-2 flex items-center justify-between">
                   <button
+                    type="button"
                     onClick={() => change(coin, -1)}
-                    disabled={qty === 0}
+                    disabled={qty === 0 || isPending}
                     aria-label={`Rimuovi ${coin.id}`}
                     className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-300 text-lg font-bold text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-30 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
                     −
                   </button>
                   <span
-                    className={`text-sm font-semibold tabular-nums ${owned ? "text-emerald-700 dark:text-emerald-300" : "text-zinc-400"}`}
+                    className={`text-sm font-semibold tabular-nums ${
+                      owned
+                        ? "text-emerald-700 dark:text-emerald-300"
+                        : "text-zinc-400"
+                    }`}
                     aria-live="polite"
                   >
                     {owned ? `${qty} pz` : "Non posseduta"}
                   </span>
                   <button
+                    type="button"
                     onClick={() => change(coin, 1)}
-                    disabled={qty >= 99}
+                    disabled={qty >= COLLECTION_LIMITS.MAX || isPending}
                     aria-label={`Aggiungi ${coin.id}`}
                     className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-lg font-bold text-white transition hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
