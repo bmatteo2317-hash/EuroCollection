@@ -71,15 +71,17 @@ export default function AuthForm({
         },
       });
       if (error) throw error;
+      // Verifica email NON obbligatoria: nessuna conferma da attendere,
+      // ci si fida dell'indirizzo inserito. Se la sessione è immediata si
+      // mostra il messaggio e poi si entra; altrimenti si invita ad accedere.
+      setMsg(
+        "Account creato! Spero tu abbia inserito la mail giusta: accedi pure, io mi fido di te."
+      );
       if (data.session) {
-        // "Confirm email" DISABILITATO su Supabase: sessione immediata,
-        // nessuna email di verifica da attendere.
-        router.push("/");
-        router.refresh();
-      } else {
-        setMsg(
-          "Account creato! Controlla l'email e clicca il link di conferma, poi accedi."
-        );
+        setTimeout(() => {
+          router.push("/");
+          router.refresh();
+        }, 1500);
       }
     } catch (e: unknown) {
       setErr(friendlyAuthError(e));
