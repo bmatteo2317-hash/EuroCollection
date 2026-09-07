@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { fetchOwnership } from "@/lib/collection";
+import { isValidCountry } from "@/lib/catalog";
 import {
   COLLECTION_LIMITS,
   isGrade,
@@ -12,6 +13,8 @@ import {
   type OwnershipMap,
   type QuantityUpdateResult,
 } from "@/lib/types";
+
+type ServerSupabase = Awaited<ReturnType<typeof createClient>>;
 
 function clampQuantity(qty: number): number {
   if (!Number.isFinite(qty)) return 0;
@@ -30,10 +33,44 @@ async function requireUserId() {
   return { supabase, userId: user.id };
 }
 
-function revalidateCollectionPaths(): void {
+function revalidateCollectionPaths(coinId?: string): void {
   revalidatePath("/");
   revalidatePath("/collezione");
-  revalidatePath("/paese/[country]", "page");
+  // Revalidate concreto della pagina paese (il coin_id inizia con "<country>-"):
+  // niente pattern con parentesi, che alcune versioni di Next rifiutano.
+  const code = coinId?.split("-")[0] ?? "";
+  if (isValidCountry(code)) revalidatePath(`/paese/${code}`);
+}
+
+/**
+ * Scrive la quantità con UN SOLO client autenticato (niente doppia getUser):
+ * qty <= 0 → DELETE, qty > 0 → UPSERT su (user_id, coin_id).
+ */
+async function applyQuantity(
+  supabase: ServerSupabase,
+  userId: string,
+  coinId: string,
+  qty: number
+): Promise<QuantityUpdateResult> {
+  const clean = clampQuantity(qty);
+
+  if (clean <= 0) {
+    const { error } = await supabase
+      .from("user_collection")
+      .delete()
+      .eq("user_id", userId)
+      .eq("coin_id", coinId);
+    if (error) throw new Error(error.message);
+  } else {
+    const { error } = await supabase.from("user_collection").upsert(
+      { user_id: userId, coin_id: coinId, quantity: clean },
+      { onConflict: "user_id,coin_id" }
+    );
+    if (error) throw new Error(error.message);
+  }
+
+  revalidateCollectionPaths(coinId);
+  return { coinId, quantity: clean };
 }
 
 /** Collezione dell'utente loggato: { [coin_id]: quantity }. */
@@ -60,25 +97,7 @@ export async function setCoinQuantity(
   qty: number
 ): Promise<QuantityUpdateResult> {
   const { supabase, userId } = await requireUserId();
-  const clean = clampQuantity(qty);
-
-  if (clean <= 0) {
-    const { error } = await supabase
-      .from("user_collection")
-      .delete()
-      .eq("user_id", userId)
-      .eq("coin_id", coinId);
-    if (error) throw new Error(error.message);
-  } else {
-    const { error } = await supabase.from("user_collection").upsert(
-      { user_id: userId, coin_id: coinId, quantity: clean },
-      { onConflict: "user_id,coin_id" }
-    );
-    if (error) throw new Error(error.message);
-  }
-
-  revalidateCollectionPaths();
-  return { coinId, quantity: clean };
+  return applyQuantity(supabase, userId, coinId, qty);
 }
 
 /**
@@ -98,7 +117,7 @@ export async function incrementCoin(
     .maybeSingle();
   if (error) throw new Error(error.message);
   const current = data?.quantity ?? 0;
-  return setCoinQuantity(coinId, current + 1);
+  return applyQuantity(supabase, userId, coinId, current + 1);
 }
 
 /**
@@ -117,7 +136,7 @@ export async function decrementCoin(
     .maybeSingle();
   if (error) throw new Error(error.message);
   const current = data?.quantity ?? 0;
-  return setCoinQuantity(coinId, current - 1);
+  return applyQuantity(supabase, userId, coinId, current - 1);
 }
 
 /** Dettagli completi (quantità + grado + note) dell'utente loggato. */
@@ -187,7 +206,7 @@ export async function updateCoinDetails(
   if (error) throw new Error(error.message);
   if (!data) throw new Error("NOT_OWNED");
 
-  revalidateCollectionPaths();
+  revalidateCollectionPaths(coinId);
   return {
     coinId,
     ownership: {

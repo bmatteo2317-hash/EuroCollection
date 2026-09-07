@@ -168,10 +168,11 @@ export default function CoinGrid({
         if (delta > 0) await incrementCoin(coin.id);
         else await decrementCoin(coin.id);
       } catch (e) {
+        const detail = e instanceof Error ? e.message : "Errore sconosciuto";
         setError(
-          e instanceof Error && e.message !== "UNAUTHENTICATED"
-            ? `Aggiornamento non riuscito per ${coin.faceValue} ${coin.year}. Riprova.`
-            : "Sessione scaduta: accedi di nuovo per salvare la collezione."
+          detail === "UNAUTHENTICATED"
+            ? "Sessione scaduta: accedi di nuovo per salvare la collezione."
+            : `Operazione fallita su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
         );
       }
     });
@@ -195,11 +196,12 @@ export default function CoinGrid({
           setDetails((prev) => ({ ...prev, [coin.id]: res.ownership as Ownership }));
         }
       } catch (e) {
+        const detail = e instanceof Error ? e.message : "Errore sconosciuto";
         if (previous) setDetails((prev) => ({ ...prev, [coin.id]: previous }));
         setError(
-          e instanceof Error && e.message === "NOT_OWNED"
+          detail === "NOT_OWNED"
             ? "Premi prima + per possedere la moneta, poi aggiungi grado e note."
-            : `Salvataggio dettagli non riuscito per ${coin.faceValue} ${coin.year}. Riprova.`
+            : `Salvataggio dettagli fallito su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
         );
       }
     });
