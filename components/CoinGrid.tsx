@@ -74,6 +74,24 @@ function clampQty(qty: number): number {
   );
 }
 
+/**
+ * Dettaglio leggibile di un errore da Server Action.
+ * Gli errori di render Server Component arrivano in produzione come
+ * "Minified React error #441": il `digest` di Next.js contiene la causa
+ * reale (visibile anche nei server log su Vercel).
+ */
+function toErrorDetail(e: unknown): string {
+  if (e instanceof Error) {
+    console.error("[CoinGrid] server action fallita:", e);
+    const digest =
+      typeof (e as { digest?: unknown }).digest === "string"
+        ? (e as { digest?: string }).digest
+        : null;
+    return digest ? `${e.message} (digest: ${digest})` : e.message;
+  }
+  return "Errore sconosciuto";
+}
+
 function valueRank(coin: CatalogCoin): number {
   return DENOMINATIONS.indexOf(coin.denomination);
 }
@@ -195,7 +213,7 @@ export default function CoinGrid({
         setQuantities((prev) => withQuantity(prev, coin.id, res.quantity));
       } catch (e) {
         setQuantities((prev) => withQuantity(prev, coin.id, current));
-        const detail = e instanceof Error ? e.message : "Errore sconosciuto";
+        const detail = toErrorDetail(e);
         setError(
           detail === "UNAUTHENTICATED"
             ? "Sessione scaduta: accedi di nuovo per salvare la collezione."
@@ -232,7 +250,7 @@ export default function CoinGrid({
       } catch (e) {
         setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
         setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
-        const detail = e instanceof Error ? e.message : "Errore sconosciuto";
+        const detail = toErrorDetail(e);
         setError(
           `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
         );
@@ -258,7 +276,7 @@ export default function CoinGrid({
           setDetails((prev) => ({ ...prev, [coin.id]: res.ownership as Ownership }));
         }
       } catch (e) {
-        const detail = e instanceof Error ? e.message : "Errore sconosciuto";
+        const detail = toErrorDetail(e);
         if (previous) setDetails((prev) => ({ ...prev, [coin.id]: previous }));
         setError(
           detail === "NOT_OWNED"

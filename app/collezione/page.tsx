@@ -6,6 +6,11 @@ import {
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase/server";
 import { fetchOwnership, fetchYears } from "@/lib/collection";
+import type {
+  CoinYearsMap,
+  CollectionMap,
+  OwnershipMap,
+} from "@/lib/types";
 import ProgressCircle from "@/components/ProgressCircle";
 import CompletionDonut from "@/components/CompletionDonut";
 import CountryFlag from "@/components/CountryFlag";
@@ -32,11 +37,21 @@ export default async function CollezionePage() {
   }
   if (!userId || !supabase) redirect("/login");
 
-  const { quantities: collection, details } = await fetchOwnership(
-    supabase,
-    userId
-  );
-  const coinYears = await fetchYears(supabase, userId);
+  // Mai far crashare la pagina per un errore di lettura collezione:
+  // un throw qui, durante la revalidazione scatenata da una Server Action
+  // (es. + su una moneta), si propaga al client come
+  // "Minified React error #441". Fallback a collezione vuota.
+  let collection: CollectionMap = {};
+  let details: OwnershipMap = {};
+  let coinYears: CoinYearsMap = {};
+  try {
+    const fetched = await fetchOwnership(supabase, userId);
+    collection = fetched.quantities;
+    details = fetched.details;
+    coinYears = await fetchYears(supabase, userId);
+  } catch (e) {
+    console.error("[collezione] lettura collezione fallita:", e);
+  }
 
   const catalog = getCatalog();
   const total = getTotalCount();

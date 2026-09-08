@@ -35,12 +35,22 @@ async function requireUserId() {
 }
 
 function revalidateCollectionPaths(coinId?: string): void {
-  revalidatePath("/");
-  revalidatePath("/collezione");
+  // Best-effort: la scrittura su DB è già avvenuta quando questa funzione
+  // viene chiamata. Se la revalidazione (o il re-render server che ne
+  // consegue) fallisse, non deve far fallire l'action con un
+  // "Minified React error #441" ribaltando l'ottimistica in UI.
+  const paths = ["/", "/collezione"];
   // Revalidate concreto della pagina paese (il coin_id inizia con "<country>-"):
   // niente pattern con parentesi, che alcune versioni di Next rifiutano.
   const code = coinId?.split("-")[0] ?? "";
-  if (isValidCountry(code)) revalidatePath(`/paese/${code}`);
+  if (isValidCountry(code)) paths.push(`/paese/${code}`);
+  for (const path of paths) {
+    try {
+      revalidatePath(path);
+    } catch (e) {
+      console.warn(`[collection] revalidatePath(${path}) fallita:`, e);
+    }
+  }
 }
 
 /**
