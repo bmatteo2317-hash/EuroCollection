@@ -265,3 +265,154 @@ export async function removeTradeOffer(offerId: string): Promise<void> {
   if (removed.error) throw new Error(removed.error.message);
   touchScambi();
 }
+
+export interface ProposeTradeInput {
+  addresseeId: string;
+  /** Una tua offerta (ciò che dai). */
+  myOfferId: string;
+  /** Un'offerta dell'amico (ciò che chiedi). */
+  theirOfferId: string;
+  message?: string | null;
+}
+
+/**
+ * Propone uno scambio a un amico: la tua offerta per una sua offerta
+ * (1 pezzo per parte). Le monete restano visibili nei nomi delle offerte
+ * anche se le offerte vengono ritirate (snapshot su richiesta).
+ */
+export async function proposeTradeRequest(
+  input: ProposeTradeInput
+): Promise<string> {
+  const { supabase, userId } = await requireUserId();
+  if (input.addresseeId === userId) throw new Error("SELF");
+  const message =
+    typeof input.message === "string" && input.message.trim()
+      ? input.message.trim().slice(0, COLLECTION_LIMITS.MAX_NOTES_LENGTH)
+      : null;
+
+  const mine = await supabase
+    .from("trade_offers")
+    .select("id, user_id, coin_id, year, quantity")
+    .eq("id", input.myOfferId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (mine.error) throw new Error(mine.error.message);
+  if (!mine.data || (mine.data.quantity ?? 0) < 1) {
+    throw new Error("OFFER_UNAVAILABLE");
+  }
+
+  const theirs = await supabase
+    .from("trade_offers")
+    .select("id, user_id, coin_id, year, quantity")
+    .eq("id", input.theirOfferId)
+    .eq("user_id", input.addresseeId)
+    .maybeSingle();
+  if (theirs.error) throw new Error(theirs.error.message);
+  if (!theirs.data || (theirs.data.quantity ?? 0) < 1) {
+    throw new Error("OFFER_UNAVAILABLE");
+  }
+
+  const created = await supabase
+    .from("trade_requests")
+    .insert({
+      proposer_id: userId,
+      addressee_id: input.addresseeId,
+      offered_offer_id: mine.data.id,
+      requested_offer_id: theirs.data.id,
+      offered_coin_id: mine.data.coin_id,
+      offered_year: mine.data.year,
+      requested_coin_id: theirs.data.coin_id,
+      requested_year: theirs.data.year,
+      message,
+      status: "pending",
+    })
+    .select("id")
+    .maybeSingle();
+  if (created.error) throw new Error(created.error.message);
+  if (!created.data) throw new Error("REQUEST_CREATE_FAILED");
+  touchScambi();
+  return created.data.id;
+}
+
+/**
+ * Risponde a una richiesta di scambio ricevuta.
+ * accept=true → scambio automatico via accept_trade_request()
+ * (fallisce con OFFER_UNAVAILABLE se un'offerta non esiste più).
+ */
+export async function respondTradeRequest(
+  requestId: string,
+  accept: boolean
+): Promise<void> {
+  const { supabase, userId } = await requireUserId();
+  const { data, error } = await supabase
+    .from("trade_requests")
+    .select("id, proposer_id, addressee_id, status")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("NOT_FOUND");
+  if (data.addressee_id !== userId) throw new Error("FORBIDDEN");
+  if (data.status !== "pending") throw new Error("STATE");
+
+  if (accept) {
+    const swapped = await supabase.rpc("accept_trade_request", {
+      p_request_id: requestId,
+    });
+    if (swapped.error) throw new Error(swapped.error.message);
+  } else {
+    const declined = await supabase
+      .from("trade_requests")
+      .update({ status: "declined" })
+      .eq("id", requestId);
+    if (declined.error) throw new Error(declined.error.message);
+  }
+  touchScambi();
+  try {
+    revalidatePath("/");
+    revalidatePath("/collezione");
+  } catch (e) {
+    console.warn("[social] revalidate collezione fallita:", e);
+  }
+}
+
+/** Annulla una richiesta inviata e ancora in attesa. */
+export async function cancelTradeRequest(requestId: string): Promise<void> {
+  const { supabase, userId } = await requireUserId();
+  const { data, error } = await supabase
+    .from("trade_requests")
+    .select("id, proposer_id, status")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return;
+  if (data.proposer_id !== userId) throw new Error("FORBIDDEN");
+  if (data.status !== "pending") throw new Error("STATE");
+  const cancelled = await supabase
+    .from("trade_requests")
+    .update({ status: "cancelled" })
+    .eq("id", requestId);
+  if (cancelled.error) throw new Error(cancelled.error.message);
+  touchScambi();
+}
+
+/** Elimina da cronologia una richiesta chiusa (non pending). */
+export async function deleteTradeRequest(requestId: string): Promise<void> {
+  const { supabase, userId } = await requireUserId();
+  const { data, error } = await supabase
+    .from("trade_requests")
+    .select("id, proposer_id, addressee_id, status")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return;
+  if (data.proposer_id !== userId && data.addressee_id !== userId) {
+    throw new Error("FORBIDDEN");
+  }
+  if (data.status === "pending") throw new Error("STATE");
+  const removed = await supabase
+    .from("trade_requests")
+    .delete()
+    .eq("id", requestId);
+  if (removed.error) throw new Error(removed.error.message);
+  touchScambi();
+}

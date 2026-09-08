@@ -8,9 +8,11 @@ import {
   otherSide,
   toFriendship,
   toTradeOffer,
+  toTradeRequest,
   type Friendship,
   type SocialUser,
   type TradeOffer,
+  type TradeRequest,
 } from "@/lib/social";
 import SocialBoard, {
   type FriendOffersGroup,
@@ -42,6 +44,8 @@ export default async function ScambiPage() {
   let friendships: Friendship[] = [];
   let myOffers: TradeOffer[] = [];
   let groups: FriendOffersGroup[] = [];
+  let requests: TradeRequest[] = [];
+  let names: Record<string, string> = {};
   let ownedOptions: { id: string; label: string }[] = [];
   let coinLabels: Record<string, string> = {};
   let missingTables = false;
@@ -89,7 +93,29 @@ export default async function ScambiPage() {
           .map((f) => otherSide(f, userId as string))
       ),
     ];
-    const missingNames = friendIds.filter((id) => !nameById.has(id));
+
+    // Richieste di scambio dove sono parte (inviate + ricevute).
+    const reqRes = await supabase
+      .from("trade_requests")
+      .select(
+        "id, proposer_id, addressee_id, offered_offer_id, requested_offer_id, offered_coin_id, offered_year, requested_coin_id, requested_year, accepted_offered_year, accepted_requested_year, message, status"
+      )
+      .or(`proposer_id.eq.${userId},addressee_id.eq.${userId}`)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (reqRes.error) throw reqRes.error;
+    requests = (reqRes.data ?? []).map(toTradeRequest);
+
+    const counterpartIds = [
+      ...new Set(
+        requests.map((r) =>
+          r.proposerId === userId ? r.addresseeId : r.proposerId
+        )
+      ),
+    ];
+    const missingNames = [...new Set([...friendIds, ...counterpartIds])].filter(
+      (id) => !nameById.has(id)
+    );
     if (missingNames.length > 0) {
       const namesRes = await supabase
         .from("profiles")
@@ -132,6 +158,7 @@ export default async function ScambiPage() {
     const referenced = new Set<string>([
       ...myOffers.map((o) => o.coinId),
       ...groups.flatMap((g) => g.offers.map((o) => o.coinId)),
+      ...requests.flatMap((r) => [r.offeredCoinId, r.requestedCoinId]),
     ]);
     for (const id of referenced) coinLabels[id] = labelFor(id);
 
@@ -142,6 +169,8 @@ export default async function ScambiPage() {
     for (const opt of ownedOptions) {
       if (!coinLabels[opt.id]) coinLabels[opt.id] = labelFor(opt.id);
     }
+
+    names = Object.fromEntries(nameById);
   } catch (e) {
     if (isMissingTableError(e)) {
       missingTables = true;
@@ -178,6 +207,8 @@ export default async function ScambiPage() {
         friendships={friendships}
         myOffers={myOffers}
         groups={groups}
+        requests={requests}
+        names={names}
         ownedOptions={ownedOptions}
         coinLabels={coinLabels}
       />
