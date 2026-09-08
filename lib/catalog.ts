@@ -26,10 +26,8 @@ export interface CatalogCoin extends CoinSource {
   faceValue: string;
   /** Nome del paese in italiano. */
   countryName: string;
-  /** Descrizione curata dove verificata (con tiratura dove documentata), altrimenti fallback neutro. */
+  /** Descrizione curata dove verificata, altrimenti fallback neutro. */
   description: string;
-  /** Tiratura, solo dove documentata da fonti ufficiali/numismatiche. */
-  mintage: string | null;
   isCommemorative: boolean;
   /** true se la descrizione è curata a mano, false se generata. */
   isEnriched: boolean;
@@ -77,17 +75,16 @@ export function denominationMetal(d: Denomination): MetalInfo {
 
 // NOTA SUL PACKAGE: `@euro-coins/source` fornisce SOLO
 // { country, year, denomination, type, index, url }.
-// Descrizioni e tirature NON esistono nel package: le regole qui sotto
+// Descrizioni NON esistono nel package: le regole qui sotto
 // associano una scheda curata tramite frammenti degli URL BCE (stabili e
 // verificati), con fallback neutro generato. Per estendere: aggiungi una
-// regola { country, urlIncludes, description, mintage? }.
+// regola { country, urlIncludes, description }.
 interface EnrichmentRule {
   /** Codice paese, oppure "*" per le emissioni comuni a tutta l'Eurozona. */
   country: CountryCode | "*";
   /** Frammento da cercare nell'URL BCE della moneta (case-insensitive). */
   urlIncludes: string;
   description: string;
-  mintage?: string;
 }
 
 const ENRICHMENT: readonly EnrichmentRule[] = [
@@ -129,7 +126,6 @@ const ENRICHMENT: readonly EnrichmentRule[] = [
     urlIncludes: "comm_2004_it",
     description:
       "50° anniversario del Programma Alimentare Mondiale (WFP).",
-    mintage: "16.000.000",
   },
   {
     country: "it",
@@ -254,7 +250,6 @@ const ENRICHMENT: readonly EnrichmentRule[] = [
     country: "sm",
     urlIncludes: "comm_2004_sm",
     description: "Bartolomeo Borghesi — storico e numismatico sammarinese.",
-    mintage: "110.000",
   },
   {
     country: "sm",
@@ -288,7 +283,6 @@ const ENRICHMENT: readonly EnrichmentRule[] = [
     urlIncludes: "comm_2004_va",
     description:
       "75° anniversario della fondazione dello Stato della Città del Vaticano.",
-    mintage: "100.000",
   },
   {
     country: "va",
@@ -426,15 +420,12 @@ function findEnrichmentRule(coin: CoinSource): EnrichmentRule | undefined {
 
 function toCatalogCoin(coin: CoinSource): CatalogCoin {
   const rule = findEnrichmentRule(coin);
-  const base = rule?.description ?? fallbackDescription(coin);
-  const mintage = rule?.mintage ?? null;
   return {
     ...coin,
     id: coinId(coin),
     faceValue: formatDenomination(coin.denomination),
     countryName: COUNTRY_NAMES[coin.country] ?? coin.country.toUpperCase(),
-    description: mintage ? `${base} Tiratura: ${mintage} pezzi.` : base,
-    mintage,
+    description: rule?.description ?? fallbackDescription(coin),
     isCommemorative: coin.type === "commemorative",
     isEnriched: Boolean(rule),
     metal: denominationMetal(coin.denomination),

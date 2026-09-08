@@ -138,7 +138,7 @@ export default async function PaesePage({
 
       <p className="text-center text-xs text-zinc-400">
         Totale Eurozona: {total} monete · Descrizioni curate per i principali
-        commemorativi, tiratura dove documentata.
+        commemorativi.
       </p>
     </div>
   );

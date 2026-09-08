@@ -36,13 +36,7 @@ interface Props {
 
 type KindFilter = "all" | "regular" | "commemorative";
 type PossessionFilter = "all" | "owned" | "missing" | "duplicates";
-type SortKey =
-  | "year-desc"
-  | "year-asc"
-  | "value-desc"
-  | "value-asc"
-  | "mintage-desc"
-  | "mintage-asc";
+type SortKey = "year-desc" | "year-asc" | "value-desc" | "value-asc";
 
 /** Imposta/cancella una quantità nella mappa (qty <= 0 → rimuove la chiave). */
 function withQuantity(
@@ -102,16 +96,6 @@ function toErrorDetail(e: unknown): string {
 
 function valueRank(coin: CatalogCoin): number {
   return DENOMINATIONS.indexOf(coin.denomination);
-}
-
-/**
- * Tiratura come numero (es. "16.000.000" → 16000000), null se ignota.
- * Le tirature ignote finiscono sempre in fondo, in entrambi i versi.
- */
-function mintageValue(coin: CatalogCoin): number | null {
-  if (!coin.mintage) return null;
-  const n = Number(coin.mintage.replace(/\./g, ""));
-  return Number.isFinite(n) ? n : null;
 }
 
 export default function CoinGrid({
@@ -179,24 +163,6 @@ export default function CoinGrid({
         break;
       case "value-asc":
         sorted.sort((a, b) => valueRank(b) - valueRank(a) || b.year - a.year);
-        break;
-      case "mintage-desc":
-        sorted.sort(
-          (a, b) =>
-            (mintageValue(b) ?? -1) - (mintageValue(a) ?? -1) ||
-            b.year - a.year ||
-            valueRank(a) - valueRank(b)
-        );
-        break;
-      case "mintage-asc":
-        sorted.sort((a, b) => {
-          const ma = mintageValue(a);
-          const mb = mintageValue(b);
-          if (ma == null && mb == null) return b.year - a.year;
-          if (ma == null) return 1;
-          if (mb == null) return -1;
-          return ma - mb || b.year - a.year || valueRank(a) - valueRank(b);
-        });
         break;
       case "year-desc":
       default:
@@ -439,8 +405,6 @@ export default function CoinGrid({
               <option value="year-asc">Anno ↑ vecchie prima</option>
               <option value="value-desc">Valore ↓ 2€ prima</option>
               <option value="value-asc">Valore ↑ cent prima</option>
-              <option value="mintage-desc">Tiratura ↓ alte prima</option>
-              <option value="mintage-asc">Tiratura ↑ basse prima</option>
             </select>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
