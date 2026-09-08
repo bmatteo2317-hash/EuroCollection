@@ -117,6 +117,11 @@ export default function CoinGrid({
     useState<CollectionMap>(initialCollection);
   const [yearsMap, setYearsMap] = useState<CoinYearsMap>(initialYears);
   const [details, setDetails] = useState<OwnershipMap>(initialDetails);
+  // Action in volo per moneta: finché l'operazione di una moneta non
+  // risponde, i suoi pulsanti restano disabilitati. Evita spam di click
+  // → niente action concorrenti sulla stessa riga (letture vecchie e
+  // risposte in disordine causavano salti visivi del badge/conteggio).
+  const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(new Set());
 
   // ---- Filtri di ricerca e ordinamento (istantanei, solo client) ----
   const [query, setQuery] = useState("");
@@ -181,6 +186,18 @@ export default function CoinGrid({
     setSort("year-desc");
   };
 
+  const isBusy = (id: string): boolean => busyIds.has(id);
+
+  const setBusy = (id: string, busy: boolean): void => {
+    setBusyIds((prev) => {
+      if (busy === prev.has(id)) return prev;
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   const handleGuest = (): void => {
     // Reindirizzamento al blocco di login: ancora #login-hint se presente,
     // altrimenti navigazione a /login.
@@ -197,10 +214,12 @@ export default function CoinGrid({
       handleGuest();
       return;
     }
+    if (isBusy(coin.id)) return;
     const current = quantities[coin.id] ?? 0;
     const next = clampQty(current + delta);
     if (next === current) return;
     setError(null);
+    setBusy(coin.id, true);
 
     // Feedback immediato + persistenza: lo stato locale resta sul nuovo
     // valore anche a transizione finita; solo in caso di errore si torna
@@ -221,6 +240,8 @@ export default function CoinGrid({
             ? "Sessione scaduta: accedi di nuovo per salvare la collezione."
             : `Operazione fallita su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
         );
+      } finally {
+        setBusy(coin.id, false);
       }
     });
   };
@@ -230,7 +251,9 @@ export default function CoinGrid({
       handleGuest();
       return;
     }
+    if (isBusy(coin.id)) return;
     setError(null);
+    setBusy(coin.id, true);
     const prevYearQty = yearsMap[coin.id]?.[year] ?? 0;
     const nextYearQty = prevYearQty > 0 ? 0 : 1;
     const prevMainQty = quantities[coin.id] ?? 0;
@@ -256,6 +279,8 @@ export default function CoinGrid({
         setError(
           `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
         );
+      } finally {
+        setBusy(coin.id, false);
       }
     });
   };
@@ -276,7 +301,9 @@ export default function CoinGrid({
     // Anno non ancora posseduto: il decremento non fa nulla, l'incremento
     // equivale al toggle (aggiunge il primo pezzo).
     if (prevYearQty === 0 && delta < 0) return;
+    if (isBusy(coin.id)) return;
     setError(null);
+    setBusy(coin.id, true);
     const prevMainQty = quantities[coin.id] ?? 0;
     const nextMainQty = Math.max(0, prevMainQty - prevYearQty + nextYearQty);
 
@@ -301,6 +328,8 @@ export default function CoinGrid({
         setError(
           `Doppioni ${coin.faceValue} ${year} · ${coin.countryName}: ${detail}`
         );
+      } finally {
+        setBusy(coin.id, false);
       }
     });
   };
@@ -314,7 +343,9 @@ export default function CoinGrid({
       handleGuest();
       return;
     }
+    if (isBusy(coin.id)) return;
     setError(null);
+    setBusy(coin.id, true);
     const previous: Ownership | null = details[coin.id] ?? null;
     startTransition(async () => {
       try {
@@ -330,6 +361,8 @@ export default function CoinGrid({
             ? "Premi prima + per possedere la moneta, poi aggiungi grado e note."
             : `Salvataggio dettagli fallito su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
         );
+      } finally {
+        setBusy(coin.id, false);
       }
     });
   };
@@ -448,6 +481,7 @@ export default function CoinGrid({
           const qty = quantities[coin.id] ?? 0;
           const owned = qty > 0;
           const ownership = details[coin.id] ?? null;
+          const busy = busyIds.has(coin.id);
           // Divisionali multi-anno: possesso per anno (chip) invece di +/−.
           const isMultiYear = !coin.isCommemorative && coin.years.length > 1;
           return (
@@ -519,6 +553,7 @@ export default function CoinGrid({
                     coin={coin}
                     ownedYears={yearsMap[coin.id] ?? {}}
                     isGuest={isGuest}
+                    busy={busy}
                     onGuest={handleGuest}
                     onToggle={(year) => toggleYear(coin, year)}
                     onYearDelta={(year, delta) => changeYear(coin, year, delta)}
@@ -528,7 +563,7 @@ export default function CoinGrid({
                   <button
                     type="button"
                     onClick={() => change(coin, -1)}
-                    disabled={qty === 0 || isPending}
+                    disabled={qty === 0 || busy}
                     aria-label={`Rimuovi ${coin.id}`}
                     className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-300 text-lg font-bold text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-30 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
@@ -547,7 +582,7 @@ export default function CoinGrid({
                   <button
                     type="button"
                     onClick={() => change(coin, 1)}
-                    disabled={qty >= COLLECTION_LIMITS.MAX || isPending}
+                    disabled={qty >= COLLECTION_LIMITS.MAX || busy}
                     aria-label={`Aggiungi ${coin.id}`}
                     className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-lg font-bold text-white transition hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
@@ -562,7 +597,7 @@ export default function CoinGrid({
                     coinLabel={`${coin.faceValue} ${coin.year}`}
                     initialGrade={ownership?.grade ?? null}
                     initialNotes={ownership?.notes ?? ""}
-                    saving={isPending}
+                    saving={busy}
                     onSave={(grade, notes) => saveDetails(coin, grade, notes)}
                   />
                 )}
@@ -607,6 +642,7 @@ function YearChips({
   coin,
   ownedYears,
   isGuest,
+  busy,
   onGuest,
   onToggle,
   onYearDelta,
@@ -614,6 +650,8 @@ function YearChips({
   coin: CatalogCoin;
   ownedYears: Record<number, number>;
   isGuest: boolean;
+  /** true mentre un'operazione di questa moneta è in volo: blocca i click. */
+  busy: boolean;
   onGuest: () => void;
   onToggle: (year: number) => void;
   onYearDelta: (year: number, delta: 1 | -1) => void;
@@ -666,9 +704,10 @@ function YearChips({
                 <button
                   type="button"
                   onClick={() => press(y)}
+                  disabled={busy}
                   aria-pressed={has}
                   aria-label={`${has ? "Rimuovi" : "Aggiungi"} anno ${y}`}
-                  className={`flex-1 rounded-lg px-1.5 py-0.5 text-left text-[11px] font-semibold tabular-nums transition ${
+                  className={`flex-1 rounded-lg px-1.5 py-0.5 text-left text-[11px] font-semibold tabular-nums transition disabled:cursor-wait disabled:opacity-60 ${
                     has
                       ? "bg-emerald-600 text-white shadow-sm"
                       : "bg-zinc-200 text-zinc-500 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
@@ -681,15 +720,16 @@ function YearChips({
                     <button
                       type="button"
                       onClick={() => step(y, -1)}
+                      disabled={busy}
                       aria-label={`Un pezzo in meno del ${y}`}
-                      className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 text-xs font-bold text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                      className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 text-xs font-bold text-zinc-600 hover:bg-zinc-100 disabled:cursor-wait disabled:opacity-40 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700"
                     >
                       −
                     </button>
                     <button
                       type="button"
                       onClick={() => step(y, 1)}
-                      disabled={qty >= COLLECTION_LIMITS.MAX}
+                      disabled={busy || qty >= COLLECTION_LIMITS.MAX}
                       aria-label={`Un doppione in più del ${y}`}
                       title="Aggiungi un doppione di questo anno"
                       className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
