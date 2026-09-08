@@ -6,7 +6,9 @@ import { useMemo, useState, useTransition } from "react";
 import { DENOMINATIONS, type CatalogCoin } from "@/lib/catalog";
 import {
   decrementCoin,
+  decrementCoinYear,
   incrementCoin,
+  incrementCoinYear,
   toggleCoinYear,
   updateCoinDetails,
 } from "@/app/actions/collection";
@@ -231,13 +233,13 @@ export default function CoinGrid({
     setError(null);
     const prevYearQty = yearsMap[coin.id]?.[year] ?? 0;
     const nextYearQty = prevYearQty > 0 ? 0 : 1;
-    const prevCount = countOwnedYears(yearsMap[coin.id]);
     const prevMainQty = quantities[coin.id] ?? 0;
+    // Ottimistica a SOMMA pezzi (doppioni inclusi), come fa il server:
+    // togli/aggiungi solo i pezzi di quest'anno.
+    const nextMainQty = Math.max(0, prevMainQty - prevYearQty + nextYearQty);
 
     setYearsMap((prev) => withYear(prev, coin.id, year, nextYearQty));
-    setQuantities((prev) =>
-      withQuantity(prev, coin.id, prevCount + (nextYearQty > 0 ? 1 : -1))
-    );
+    setQuantities((prev) => withQuantity(prev, coin.id, nextMainQty));
     startTransition(async () => {
       try {
         const res = await toggleCoinYear(coin.id, year);
@@ -245,7 +247,7 @@ export default function CoinGrid({
           withYear(prev, coin.id, res.year, res.quantity)
         );
         setQuantities((prev) =>
-          withQuantity(prev, coin.id, res.ownedYears)
+          withQuantity(prev, coin.id, res.totalPieces)
         );
       } catch (e) {
         setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
@@ -253,6 +255,51 @@ export default function CoinGrid({
         const detail = toErrorDetail(e);
         setError(
           `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
+        );
+      }
+    });
+  };
+
+  /**
+   * Doppioni di un singolo anno: +/− sulla quantità di QUELL'ANNO
+   * (es. 2002 x2). Il server risincronizza la riga principale come
+   * SOMMA dei pezzi di tutti gli anni.
+   */
+  const changeYear = (coin: CatalogCoin, year: number, delta: 1 | -1): void => {
+    if (isGuest) {
+      handleGuest();
+      return;
+    }
+    const prevYearQty = yearsMap[coin.id]?.[year] ?? 0;
+    const nextYearQty = clampQty(prevYearQty + delta);
+    if (nextYearQty === prevYearQty) return;
+    // Anno non ancora posseduto: il decremento non fa nulla, l'incremento
+    // equivale al toggle (aggiunge il primo pezzo).
+    if (prevYearQty === 0 && delta < 0) return;
+    setError(null);
+    const prevMainQty = quantities[coin.id] ?? 0;
+    const nextMainQty = Math.max(0, prevMainQty - prevYearQty + nextYearQty);
+
+    setYearsMap((prev) => withYear(prev, coin.id, year, nextYearQty));
+    setQuantities((prev) => withQuantity(prev, coin.id, nextMainQty));
+    startTransition(async () => {
+      try {
+        const res =
+          delta > 0
+            ? await incrementCoinYear(coin.id, year)
+            : await decrementCoinYear(coin.id, year);
+        setYearsMap((prev) =>
+          withYear(prev, coin.id, res.year, res.quantity)
+        );
+        setQuantities((prev) =>
+          withQuantity(prev, coin.id, res.totalPieces)
+        );
+      } catch (e) {
+        setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
+        setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
+        const detail = toErrorDetail(e);
+        setError(
+          `Doppioni ${coin.faceValue} ${year} · ${coin.countryName}: ${detail}`
         );
       }
     });
@@ -474,6 +521,7 @@ export default function CoinGrid({
                     isGuest={isGuest}
                     onGuest={handleGuest}
                     onToggle={(year) => toggleYear(coin, year)}
+                    onYearDelta={(year, delta) => changeYear(coin, year, delta)}
                   />
                 ) : (
                 <div className="mt-2 flex items-center justify-between">
@@ -549,8 +597,11 @@ function MetalLegend({ swatch, label }: { swatch: string; label: string }) {
 
 /**
  * Caselle anni di un disegno divisionale: tocca un anno per segnarlo
- * posseduto/mancante. Puramente presentazionale: lo stato vive nel padre
+ * posseduto/mancante, poi usa −/+ sullo stesso anno per i doppioni
+ * (es. 2002 x2). Puramente presentazionale: lo stato vive nel padre
  * (resta visibile anche a operazione conclusa) e il toggle nel padre.
+ * Memorizzazione: ogni anno è una riga di `user_collection_years`
+ * (quantity = doppioni di quell'anno); la riga principale è la somma.
  */
 function YearChips({
   coin,
@@ -558,15 +609,21 @@ function YearChips({
   isGuest,
   onGuest,
   onToggle,
+  onYearDelta,
 }: {
   coin: CatalogCoin;
   ownedYears: Record<number, number>;
   isGuest: boolean;
   onGuest: () => void;
   onToggle: (year: number) => void;
+  onYearDelta: (year: number, delta: 1 | -1) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ownedCount = countOwnedYears(ownedYears);
+  const pieces = Object.values(ownedYears).reduce(
+    (sum, q) => sum + Math.max(0, q ?? 0),
+    0
+  );
   const total = coin.years.length;
 
   const press = (year: number): void => {
@@ -575,6 +632,14 @@ function YearChips({
       return;
     }
     onToggle(year);
+  };
+
+  const step = (year: number, delta: 1 | -1): void => {
+    if (isGuest) {
+      onGuest();
+      return;
+    }
+    onYearDelta(year, delta);
   };
 
   return (
@@ -587,34 +652,59 @@ function YearChips({
       >
         <span className="tabular-nums">
           Anni: {ownedCount}/{total}
+          {pieces > ownedCount ? ` · ${pieces} pz` : ""}
         </span>
         <span>{open ? "▾ Nascondi" : "▸ Spunta gli anni"}</span>
       </button>
       {open && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="mt-1.5 flex flex-col gap-1">
           {coin.years.map((y) => {
-            const has = (ownedYears[y] ?? 0) > 0;
+            const qty = ownedYears[y] ?? 0;
+            const has = qty > 0;
             return (
-              <button
-                key={y}
-                type="button"
-                onClick={() => press(y)}
-                aria-pressed={has}
-                aria-label={`${has ? "Rimuovi" : "Aggiungi"} anno ${y}`}
-                className={`rounded-lg px-1.5 py-0.5 text-[11px] font-semibold tabular-nums transition ${
-                  has
-                    ? "bg-emerald-600 text-white shadow-sm"
-                    : "bg-zinc-200 text-zinc-500 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
-                }`}
-              >
-                {y}
-              </button>
+              <div key={y} className="flex items-center justify-between gap-1">
+                <button
+                  type="button"
+                  onClick={() => press(y)}
+                  aria-pressed={has}
+                  aria-label={`${has ? "Rimuovi" : "Aggiungi"} anno ${y}`}
+                  className={`flex-1 rounded-lg px-1.5 py-0.5 text-left text-[11px] font-semibold tabular-nums transition ${
+                    has
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "bg-zinc-200 text-zinc-500 hover:bg-zinc-300 dark:bg-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-600"
+                  }`}
+                >
+                  {y}{has && qty > 1 ? ` · x${qty}` : ""}
+                </button>
+                {has && (
+                  <span className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => step(y, -1)}
+                      aria-label={`Un pezzo in meno del ${y}`}
+                      className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 text-xs font-bold text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => step(y, 1)}
+                      disabled={qty >= COLLECTION_LIMITS.MAX}
+                      aria-label={`Un doppione in più del ${y}`}
+                      title="Aggiungi un doppione di questo anno"
+                      className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+                    >
+                      +
+                    </button>
+                  </span>
+                )}
+              </div>
             );
           })}
         </div>
       )}
       <p className="mt-1 text-[10px] text-zinc-400">
-        Tocca gli anni che possiedi di questo disegno.
+        Tocca gli anni che possiedi; con + segni i doppioni dello stesso anno.
       </p>
     </div>
   );

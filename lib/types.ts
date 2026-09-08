@@ -122,6 +122,29 @@ export function getOwnedYears(
     .sort((a, b) => a - b);
 }
 
+/**
+ * Pezzi totali di un disegno = SOMMA delle quantità per anno
+ * (include i doppioni dello stesso anno: es. 2002 x2 + 2005 x1 = 3).
+ * È il valore sincronizzato dal server in `user_collection.quantity`.
+ */
+export function sumYearQuantities(
+  years: CoinYearsMap,
+  coinId: string
+): number {
+  return Object.values(years[coinId] ?? {}).reduce(
+    (sum, qty) => sum + (qty > 0 ? qty : 0),
+    0
+  );
+}
+
+/** Anni distinti posseduti di un disegno (senza contare i doppioni). */
+export function countDistinctYears(
+  years: CoinYearsMap,
+  coinId: string
+): number {
+  return getOwnedYears(years, coinId).length;
+}
+
 /** Calcola le statistiche a partire da catalogo totale + mappa collezione. */
 export function buildCollectionStats(
   collection: CollectionMap,

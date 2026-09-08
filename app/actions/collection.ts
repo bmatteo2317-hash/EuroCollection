@@ -165,26 +165,156 @@ export async function getMyYears(): Promise<CoinYearsMap> {
 export interface ToggleYearResult {
   coinId: string;
   year: number;
-  /** Quantità dell'anno dopo il toggle (0 = rimosso, 1 = posseduto). */
+  /** Quantità dell'anno dopo l'operazione (0 = rimosso, N = doppioni). */
   quantity: number;
-  /** Anni posseduti totali del disegno (per sync ottimistica del badge). */
+  /** Anni distinti posseduti del disegno (per sync ottimistica del badge). */
   ownedYears: number;
+  /** Pezzi totali del disegno = somma quantità per anno (doppioni inclusi). */
+  totalPieces: number;
+}
+
+function cleanYear(year: number): number {
+  const cleanYear = Math.floor(year);
+  if (!Number.isFinite(cleanYear) || cleanYear < 1999 || cleanYear > 2100) {
+    throw new Error("INVALID_YEAR");
+  }
+  return cleanYear;
 }
 
 /**
- * Spunta / deseleziona un anno di un disegno divisionale.
+ * Somma i pezzi posseduti di un disegno (SOMMA quantity, non conteggio
+ * righe: così i doppioni dello stesso anno contano) e sincronizza la riga
+ * principale `user_collection.quantity` (include revalidate dei path).
+ * Ritorna { distinti, pezzi }.
+ */
+async function syncMainRowFromYears(
+  supabase: ServerSupabase,
+  userId: string,
+  coinId: string
+): Promise<{ ownedYears: number; totalPieces: number }> {
+  const owned = await supabase
+    .from("user_collection_years")
+    .select("quantity")
+    .eq("user_id", userId)
+    .eq("coin_id", coinId);
+  if (owned.error) throw new Error(owned.error.message);
+  const rows = owned.data ?? [];
+  const ownedYears = rows.filter((r) => (r.quantity ?? 0) > 0).length;
+  const totalPieces = rows.reduce(
+    (sum, r) => sum + Math.max(0, r.quantity ?? 0),
+    0
+  );
+  await applyQuantity(supabase, userId, coinId, totalPieces);
+  return { ownedYears, totalPieces };
+}
+
+/**
+ * Imposta la quantità esatta (doppioni) di un anno di un disegno.
+ * qty <= 0 → DELETE dell'anno; qty > 0 → UPSERT su (user_id, coin_id, year).
+ * La riga principale viene sincronizzata = SOMMA pezzi di tutti gli anni.
+ */
+export async function setCoinYearQuantity(
+  coinId: string,
+  year: number,
+  qty: number
+): Promise<ToggleYearResult> {
+  const y = cleanYear(year);
+  const clean = clampQuantity(qty);
+  const { supabase, userId } = await requireUserId();
+
+  if (clean <= 0) {
+    const removed = await supabase
+      .from("user_collection_years")
+      .delete()
+      .eq("user_id", userId)
+      .eq("coin_id", coinId)
+      .eq("year", y);
+    if (removed.error) {
+      if (isMissingTableError(removed.error)) {
+        throw new Error(MISSING_YEARS_TABLE_MESSAGE);
+      }
+      throw new Error(removed.error.message);
+    }
+  } else {
+    const saved = await supabase.from("user_collection_years").upsert(
+      { user_id: userId, coin_id: coinId, year: y, quantity: clean },
+      { onConflict: "user_id,coin_id,year" }
+    );
+    if (saved.error) {
+      if (isMissingTableError(saved.error)) {
+        throw new Error(MISSING_YEARS_TABLE_MESSAGE);
+      }
+      throw new Error(saved.error.message);
+    }
+  }
+
+  const { ownedYears, totalPieces } = await syncMainRowFromYears(
+    supabase,
+    userId,
+    coinId
+  );
+  return { coinId, year: y, quantity: clean, ownedYears, totalPieces };
+}
+
+/** +1 pezzo di un anno (doppione dello stesso anno). */
+export async function incrementCoinYear(
+  coinId: string,
+  year: number
+): Promise<ToggleYearResult> {
+  const y = cleanYear(year);
+  const { supabase, userId } = await requireUserId();
+  const current = await supabase
+    .from("user_collection_years")
+    .select("quantity")
+    .eq("user_id", userId)
+    .eq("coin_id", coinId)
+    .eq("year", y)
+    .maybeSingle();
+  if (current.error) {
+    if (isMissingTableError(current.error)) {
+      throw new Error(MISSING_YEARS_TABLE_MESSAGE);
+    }
+    throw new Error(current.error.message);
+  }
+  return setCoinYearQuantity(coinId, y, (current.data?.quantity ?? 0) + 1);
+}
+
+/** −1 pezzo di un anno (a zero l'anno viene rimosso). */
+export async function decrementCoinYear(
+  coinId: string,
+  year: number
+): Promise<ToggleYearResult> {
+  const y = cleanYear(year);
+  const { supabase, userId } = await requireUserId();
+  const current = await supabase
+    .from("user_collection_years")
+    .select("quantity")
+    .eq("user_id", userId)
+    .eq("coin_id", coinId)
+    .eq("year", y)
+    .maybeSingle();
+  if (current.error) {
+    if (isMissingTableError(current.error)) {
+      throw new Error(MISSING_YEARS_TABLE_MESSAGE);
+    }
+    throw new Error(current.error.message);
+  }
+  return setCoinYearQuantity(coinId, y, (current.data?.quantity ?? 0) - 1);
+}
+
+/**
+ * Spunta / deseleziona un anno di un disegno divisionale (toggle 0 ↔ 1).
+ * Mantenuta per compatibilità: per i doppioni usare
+ * `setCoinYearQuantity` / `incrementCoinYear` / `decrementCoinYear`.
  * La riga principale (`user_collection`) viene sincronizzata dal server:
- * quantità = numero di anni posseduti, così badge, filtri, statistiche e
- * dashboard restano coerenti senza lavoro extra nella UI.
+ * quantità = SOMMA dei pezzi di tutti gli anni (doppioni inclusi), così
+ * badge, filtri, statistiche e dashboard restano coerenti.
  */
 export async function toggleCoinYear(
   coinId: string,
   year: number
 ): Promise<ToggleYearResult> {
-  const cleanYear = Math.floor(year);
-  if (!Number.isFinite(cleanYear) || cleanYear < 1999 || cleanYear > 2100) {
-    throw new Error("INVALID_YEAR");
-  }
+  const y = cleanYear(year);
   const { supabase, userId } = await requireUserId();
 
   const current = await supabase
@@ -192,7 +322,7 @@ export async function toggleCoinYear(
     .select("quantity")
     .eq("user_id", userId)
     .eq("coin_id", coinId)
-    .eq("year", cleanYear)
+    .eq("year", y)
     .maybeSingle();
   if (current.error) {
     if (isMissingTableError(current.error)) {
@@ -201,19 +331,22 @@ export async function toggleCoinYear(
     throw new Error(current.error.message);
   }
 
-  let quantity: number;
-  if ((current.data?.quantity ?? 0) > 0) {
+  // Delega a setCoinYearQuantity così insert/delete + sync somma restano
+  // in un unico posto (evita il vecchio bug: sync = count righe).
+  const has = (current.data?.quantity ?? 0) > 0;
+  // setCoinYearQuantity ricrea client/utente: riuso diretto qui per
+  // singola connessione, poi sync somma-pezzi.
+  if (has) {
     const removed = await supabase
       .from("user_collection_years")
       .delete()
       .eq("user_id", userId)
       .eq("coin_id", coinId)
-      .eq("year", cleanYear);
+      .eq("year", y);
     if (removed.error) throw new Error(removed.error.message);
-    quantity = 0;
   } else {
     const added = await supabase.from("user_collection_years").upsert(
-      { user_id: userId, coin_id: coinId, year: cleanYear, quantity: 1 },
+      { user_id: userId, coin_id: coinId, year: y, quantity: 1 },
       { onConflict: "user_id,coin_id,year" }
     );
     if (added.error) {
@@ -222,20 +355,14 @@ export async function toggleCoinYear(
       }
       throw new Error(added.error.message);
     }
-    quantity = 1;
   }
 
-  // Sync riga principale = anni posseduti (include revalidate dei path).
-  const owned = await supabase
-    .from("user_collection_years")
-    .select("coin_id")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId);
-  if (owned.error) throw new Error(owned.error.message);
-  const ownedYears = owned.data?.length ?? 0;
-  await applyQuantity(supabase, userId, coinId, ownedYears);
-
-  return { coinId, year: cleanYear, quantity, ownedYears };
+  const { ownedYears, totalPieces } = await syncMainRowFromYears(
+    supabase,
+    userId,
+    coinId
+  );
+  return { coinId, year: y, quantity: has ? 0 : 1, ownedYears, totalPieces };
 }
 
 function cleanGrade(grade: Grade | null | undefined): Grade | null {
