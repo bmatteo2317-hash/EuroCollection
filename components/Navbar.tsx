@@ -35,6 +35,12 @@ export default async function Navbar() {
           >
             La mia collezione
           </Link>
+          <Link
+            href="/scambi"
+            className="rounded-full px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            Scambi
+          </Link>
           {user ? (
             <form
               action={async () => {
