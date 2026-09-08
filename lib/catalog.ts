@@ -26,7 +26,7 @@ export interface CatalogCoin extends CoinSource {
   faceValue: string;
   /** Nome del paese in italiano. */
   countryName: string;
-  /** Descrizione curata dove verificata, altrimenti fallback neutro. */
+  /** Descrizione curata dove verificata (con tiratura dove documentata), altrimenti fallback neutro. */
   description: string;
   /** Tiratura, solo dove documentata da fonti ufficiali/numismatiche. */
   mintage: string | null;
@@ -426,13 +426,15 @@ function findEnrichmentRule(coin: CoinSource): EnrichmentRule | undefined {
 
 function toCatalogCoin(coin: CoinSource): CatalogCoin {
   const rule = findEnrichmentRule(coin);
+  const base = rule?.description ?? fallbackDescription(coin);
+  const mintage = rule?.mintage ?? null;
   return {
     ...coin,
     id: coinId(coin),
     faceValue: formatDenomination(coin.denomination),
     countryName: COUNTRY_NAMES[coin.country] ?? coin.country.toUpperCase(),
-    description: rule?.description ?? fallbackDescription(coin),
-    mintage: rule?.mintage ?? null,
+    description: mintage ? `${base} Tiratura: ${mintage} pezzi.` : base,
+    mintage,
     isCommemorative: coin.type === "commemorative",
     isEnriched: Boolean(rule),
     metal: denominationMetal(coin.denomination),
