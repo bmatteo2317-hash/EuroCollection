@@ -5,6 +5,7 @@ import { useMemo, useState, useTransition } from "react";
 import {
   addTradeOffer,
   cancelTradeRequest,
+  completeTradeRequest,
   deleteTradeRequest,
   proposeTradeRequest,
   removeFriend,
@@ -151,7 +152,10 @@ export default function SocialBoard({
   const pendingReqOut = requests.filter(
     (r) => r.status === "pending" && r.proposerId === meId
   );
-  const closedReqs = requests.filter((r) => r.status !== "pending");
+  const agreedReqs = requests.filter((r) => r.status === "accepted");
+  const closedReqs = requests.filter(
+    (r) => r.status === "declined" || r.status === "cancelled" || r.status === "completed"
+  );
 
   return (
     <div className="flex flex-col gap-6" aria-busy={isPending}>
@@ -417,17 +421,18 @@ export default function SocialBoard({
       <section className="flex flex-col gap-3 rounded-3xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <h2 className="text-lg font-bold">
           Richieste di scambio
-          {pendingReqIn.length + pendingReqOut.length > 0 && (
+          {pendingReqIn.length + pendingReqOut.length + agreedReqs.length > 0 && (
             <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 dark:bg-amber-900/50 dark:text-amber-100">
-              {pendingReqIn.length + pendingReqOut.length} in attesa
+              {pendingReqIn.length + pendingReqOut.length + agreedReqs.length} aperte
             </span>
           )}
         </h2>
         {requests.length === 0 ? (
           <p className="text-sm text-zinc-500">
             Nessuna richiesta. Premi “Scambia” su una moneta di un amico per
-            proporre uno scambio 1 pezzo ↔ 1 pezzo: se accetta, le monete si
-            spostano da sole nelle collezioni.
+            proporre uno scambio 1 pezzo ↔ 1 pezzo: dopo l&apos;accordo,
+            chi completa per primo lo scambio fisico clicca “Scambio
+            effettuato” e le collezioni si aggiornano da sole.
           </p>
         ) : (
           <div className="flex flex-col gap-4">
@@ -463,6 +468,27 @@ export default function SocialBoard({
                     otherName={nameOf(r.addresseeId)}
                     coinLabels={coinLabels}
                     pending={isPending}
+                    onCancel={() => run(() => cancelTradeRequest(r.id))}
+                  />
+                ))}
+              </div>
+            )}
+            {agreedReqs.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <h3 className="text-sm font-bold text-sky-700 dark:text-sky-300">
+                  Accordi da completare ({agreedReqs.length})
+                </h3>
+                {agreedReqs.map((r) => (
+                  <RequestCard
+                    key={r.id}
+                    request={r}
+                    direction={r.proposerId === meId ? "out" : "in"}
+                    otherName={nameOf(
+                      r.proposerId === meId ? r.addresseeId : r.proposerId
+                    )}
+                    coinLabels={coinLabels}
+                    pending={isPending}
+                    onComplete={() => run(() => completeTradeRequest(r.id))}
                     onCancel={() => run(() => cancelTradeRequest(r.id))}
                   />
                 ))}
@@ -592,8 +618,10 @@ export default function SocialBoard({
 
 function statusBadge(status: TradeRequest["status"]): string {
   switch (status) {
-    case "accepted":
+    case "completed":
       return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200";
+    case "accepted":
+      return "bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-200";
     case "declined":
       return "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200";
     case "cancelled":
@@ -606,7 +634,9 @@ function statusBadge(status: TradeRequest["status"]): string {
 function statusLabel(status: TradeRequest["status"]): string {
   switch (status) {
     case "accepted":
-      return "Accettata";
+      return "Accordo raggiunto";
+    case "completed":
+      return "Scambio completato";
     case "declined":
       return "Rifiutata";
     case "cancelled":
@@ -629,6 +659,7 @@ function RequestCard({
   onAccept,
   onDecline,
   onCancel,
+  onComplete,
   onDelete,
 }: {
   request: TradeRequest;
@@ -639,6 +670,7 @@ function RequestCard({
   onAccept?: () => void;
   onDecline?: () => void;
   onCancel?: () => void;
+  onComplete?: () => void;
   onDelete?: () => void;
 }) {
   const label = (coinId: string, year: number | null): string => {
@@ -683,7 +715,7 @@ function RequestCard({
                 onClick={onAccept}
                 className="rounded-full bg-emerald-600 px-3 py-1 font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
               >
-                Accetta e scambia
+                Accetta l&apos;accordo
               </button>
               <button
                 type="button"
@@ -704,6 +736,32 @@ function RequestCard({
               Annulla richiesta
             </button>
           )}
+        </div>
+      )}
+      {r.status === "accepted" && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <p className="text-[11px] text-zinc-500">
+            Accordo raggiunto: quando vi scambiate le monete di persona,
+            conferma qui sotto e le collezioni si aggiornano da sole.
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onComplete}
+              className="rounded-full bg-emerald-600 px-3 py-1 font-bold text-white hover:bg-emerald-500 disabled:opacity-40"
+            >
+              Scambio effettuato
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={onCancel}
+              className="rounded-full border border-zinc-300 px-3 py-1 font-semibold hover:bg-white disabled:opacity-40 dark:border-zinc-700"
+            >
+              Annulla accordo
+            </button>
+          </div>
         </div>
       )}
       {r.status !== "pending" && onDelete && (

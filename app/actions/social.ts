@@ -336,8 +336,8 @@ export async function proposeTradeRequest(
 
 /**
  * Risponde a una richiesta di scambio ricevuta.
- * accept=true → scambio automatico via accept_trade_request()
- * (fallisce con OFFER_UNAVAILABLE se un'offerta non esiste più).
+ * accept=true → solo accordo (NESSUN movimento di monete: lo scambio
+ * fisico si conferma dopo con completeTradeRequest).
  */
 export async function respondTradeRequest(
   requestId: string,
@@ -355,10 +355,10 @@ export async function respondTradeRequest(
   if (data.status !== "pending") throw new Error("STATE");
 
   if (accept) {
-    const swapped = await supabase.rpc("accept_trade_request", {
+    const agreed = await supabase.rpc("accept_trade_request", {
       p_request_id: requestId,
     });
-    if (swapped.error) throw new Error(swapped.error.message);
+    if (agreed.error) throw new Error(agreed.error.message);
   } else {
     const declined = await supabase
       .from("trade_requests")
@@ -366,6 +366,33 @@ export async function respondTradeRequest(
       .eq("id", requestId);
     if (declined.error) throw new Error(declined.error.message);
   }
+  touchScambi();
+}
+
+/**
+ * Conferma l'avvenuto scambio fisico (una delle due parti, solo se c'è
+ * già l'accordo). Sposta 1 pezzo per lato e chiude come completed.
+ * Fallisce con OFFER_UNAVAILABLE se un'offerta non esiste più.
+ */
+export async function completeTradeRequest(requestId: string): Promise<void> {
+  const { supabase, userId } = await requireUserId();
+  const { data, error } = await supabase
+    .from("trade_requests")
+    .select("id, proposer_id, addressee_id, status")
+    .eq("id", requestId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("NOT_FOUND");
+  if (data.proposer_id !== userId && data.addressee_id !== userId) {
+    throw new Error("FORBIDDEN");
+  }
+  if (data.status !== "accepted") throw new Error("STATE");
+
+  const done = await supabase.rpc("complete_trade_request", {
+    p_request_id: requestId,
+  });
+  if (done.error) throw new Error(done.error.message);
+
   touchScambi();
   try {
     revalidatePath("/");
@@ -375,18 +402,32 @@ export async function respondTradeRequest(
   }
 }
 
-/** Annulla una richiesta inviata e ancora in attesa. */
+/**
+ * Annulla una richiesta inviata e ancora in attesa, oppure un accordo
+ * non ancora completato (una delle due parti).
+ */
 export async function cancelTradeRequest(requestId: string): Promise<void> {
   const { supabase, userId } = await requireUserId();
   const { data, error } = await supabase
     .from("trade_requests")
-    .select("id, proposer_id, status")
+    .select("id, proposer_id, addressee_id, status")
     .eq("id", requestId)
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return;
-  if (data.proposer_id !== userId) throw new Error("FORBIDDEN");
-  if (data.status !== "pending") throw new Error("STATE");
+  if (data.status !== "pending" && data.status !== "accepted") {
+    throw new Error("STATE");
+  }
+  if (data.status === "pending" && data.proposer_id !== userId) {
+    throw new Error("FORBIDDEN");
+  }
+  if (
+    data.status === "accepted" &&
+    data.proposer_id !== userId &&
+    data.addressee_id !== userId
+  ) {
+    throw new Error("FORBIDDEN");
+  }
   const cancelled = await supabase
     .from("trade_requests")
     .update({ status: "cancelled" })

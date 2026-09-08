@@ -2,10 +2,8 @@
 -- Esegui nel SQL Editor di Supabase.
 --
 -- trade_requests: "ti do la mia moneta A per la tua moneta B" (1 pezzo
--- per parte). All'accettazione lo scambio avviene in automatico:
--- accept_trade_request() sposta 1 unità per lato (rispettando gli anni
--- dei divisionali e riallineando le quantità principali) e consuma
--- 1 pezzo da ciascuna offerta.
+-- per parte). NOTA: da migration_007 l'accettazione è solo un accordo e
+-- lo scambio fisico si conferma dopo con complete_trade_request().
 
 -- Richieste di scambio --------------------------------------------------
 create table if not exists public.trade_requests (

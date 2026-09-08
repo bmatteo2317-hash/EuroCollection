@@ -76,7 +76,8 @@ export type TradeRequestStatus =
   | "pending"
   | "accepted"
   | "declined"
-  | "cancelled";
+  | "cancelled"
+  | "completed";
 
 export interface TradeRequest {
   id: string;
@@ -114,7 +115,8 @@ export function toTradeRequest(row: TradeRequestRow): TradeRequest {
   const status =
     row.status === "accepted" ||
     row.status === "declined" ||
-    row.status === "cancelled"
+    row.status === "cancelled" ||
+    row.status === "completed"
       ? row.status
       : "pending";
   return {

@@ -236,8 +236,8 @@ create trigger trg_touch_offers_updated_at
   for each row execute function public.touch_updated_at();
 
 -- Richieste di scambio (v2 sociale): "ti do la mia A per la tua B".
--- All'accettazione lo scambio è automatico via accept_trade_request().
--- Vedi migration_006.
+-- Accettazione = accordo; lo scambio fisico si conferma dopo con
+-- complete_trade_request(). Vedi migration_006 + migration_007.
 create table if not exists public.trade_requests (
   id uuid primary key default gen_random_uuid(),
   proposer_id uuid not null references auth.users (id) on delete cascade,
@@ -252,7 +252,7 @@ create table if not exists public.trade_requests (
   accepted_requested_year integer,
   message text,
   status text not null default 'pending'
-    check (status in ('pending', 'accepted', 'declined', 'cancelled')),
+    check (status in ('pending', 'accepted', 'declined', 'cancelled', 'completed')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (proposer_id <> addressee_id)
@@ -358,6 +358,22 @@ create or replace function public.accept_trade_request(p_request_id uuid)
 returns void language plpgsql security definer set search_path = public as $$
 declare
   r public.trade_requests%rowtype;
+begin
+  select * into r from public.trade_requests
+  where id = p_request_id for update;
+  if not found then raise exception 'NOT_FOUND'; end if;
+  if r.addressee_id <> auth.uid() then raise exception 'FORBIDDEN'; end if;
+  if r.status <> 'pending' then raise exception 'STATE'; end if;
+
+  update public.trade_requests
+  set status = 'accepted'
+  where id = p_request_id;
+end $$;
+
+create or replace function public.complete_trade_request(p_request_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  r public.trade_requests%rowtype;
   v_offered record;
   v_requested record;
   v_offered_year int;
@@ -366,8 +382,10 @@ begin
   select * into r from public.trade_requests
   where id = p_request_id for update;
   if not found then raise exception 'NOT_FOUND'; end if;
-  if r.addressee_id <> auth.uid() then raise exception 'FORBIDDEN'; end if;
-  if r.status <> 'pending' then raise exception 'STATE'; end if;
+  if r.proposer_id <> auth.uid() and r.addressee_id <> auth.uid() then
+    raise exception 'FORBIDDEN';
+  end if;
+  if r.status <> 'accepted' then raise exception 'STATE'; end if;
 
   select * into v_offered from public.trade_offers
   where id = r.offered_offer_id for update;
@@ -395,7 +413,7 @@ begin
   where id = r.requested_offer_id and quantity <= 0;
 
   update public.trade_requests
-  set status = 'accepted',
+  set status = 'completed',
       accepted_offered_year = v_offered_year,
       accepted_requested_year = v_requested_year
   where id = p_request_id;
