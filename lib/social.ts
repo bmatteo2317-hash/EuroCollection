@@ -1,9 +1,9 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { sql } from "@/lib/db";
 
 /**
  * Tipi del modulo sociale (amicizie + scambi).
- * Tabelle Supabase: `profiles`, `friendships`, `trade_offers`
- * (vedi supabase/migration_005_social_trades.sql).
+ * Tabelle Neon: `profiles`, `friendships`, `trade_offers`
+ * (vedi neon/schema.sql).
  */
 
 export type FriendshipStatus = "pending" | "accepted" | "declined";
@@ -142,25 +142,18 @@ export function otherSide(f: Friendship, meId: string): string {
 }
 
 /**
- * Crea il profilo pubblico se manca (utenti registrati prima della
- * migration 005 o trigger non scattato). Nome = parte prima della @.
+ * Crea il profilo pubblico se manca (il trigger on_user_created lo crea
+ * già alla registrazione: questo è solo un fallback per utenti esistenti).
  */
 export async function ensureProfile(
-  supabase: SupabaseClient,
   userId: string,
   email: string | null
 ): Promise<void> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("id", userId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (data) return;
+  const found = (await sql()`
+    SELECT id FROM public.profiles WHERE id = ${userId} LIMIT 1
+  `) as unknown as { id: string }[];
+  if (found.length > 0) return;
   const base =
     (email?.split("@")[0] ?? "collezionista").slice(0, 40) || "collezionista";
-  const created = await supabase
-    .from("profiles")
-    .insert({ id: userId, display_name: base });
-  if (created.error) throw new Error(created.error.message);
+  await sql()`INSERT INTO public.profiles (id, display_name) VALUES (${userId}, ${base}) ON CONFLICT (id) DO NOTHING`;
 }

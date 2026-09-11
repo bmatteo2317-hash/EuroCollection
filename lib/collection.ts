@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { sql } from "@/lib/db";
 import {
   toCollectionMap,
   toOwnership,
@@ -9,7 +9,7 @@ import {
 
 /**
  * Helper SOLO server: legge `user_collection` (quantità + grado + note)
- * e restituisce sia la mappa dettagli che la mappa quantità.
+ * da Neon e restituisce sia la mappa dettagli che la mappa quantità.
  * Da usare nei Server Component / Server Action, mai nel client.
  */
 export interface OwnershipFetch {
@@ -17,87 +17,47 @@ export interface OwnershipFetch {
   details: OwnershipMap;
 }
 
-/** Errore Postgres "colonna inesistente" (42703): migration non eseguita. */
-export function isMissingColumnError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const { code, message } = error as { code?: unknown; message?: unknown };
-  if (code === "42703") return true;
-  return (
-    typeof message === "string" && /column .* does not exist/i.test(message)
-  );
+interface OwnershipRow {
+  coin_id: string;
+  quantity: number;
+  grade: string | null;
+  notes: string | null;
+}
+
+interface YearRow {
+  coin_id: string;
+  year: number;
+  quantity: number;
 }
 
 export const MISSING_COLUMNS_MESSAGE =
-  "Manca la migration su Supabase: esegui supabase/migration_002_grade_notes.sql nel SQL Editor.";
+  "Manca lo schema su Neon: esegui neon/schema.sql nel SQL Editor di Neon.";
 
 export const MISSING_YEARS_TABLE_MESSAGE =
-  "Manca la tabella anni su Supabase: esegui supabase/migration_003_collection_years.sql nel SQL Editor.";
+  "Manca la tabella anni su Neon: esegui neon/schema.sql nel SQL Editor di Neon.";
 
-/** Errore Postgres "tabella inesistente" (42P01): migration non eseguita. */
-export function isMissingTableError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const { code, message } = error as { code?: unknown; message?: unknown };
-  if (code === "42P01") return true;
-  return (
-    typeof message === "string" && /relation .* does not exist/i.test(message)
-  );
+export async function fetchOwnership(userId: string): Promise<OwnershipFetch> {
+  const rows = (await sql()`
+    SELECT coin_id, quantity, grade, notes
+    FROM public.user_collection
+    WHERE user_id = ${userId}
+  `) as unknown as OwnershipRow[];
+  const details: OwnershipMap = {};
+  for (const row of rows ?? []) {
+    if (row.quantity > 0) details[row.coin_id] = toOwnership(row);
+  }
+  return { details, quantities: toCollectionMap(details) };
 }
 
-export async function fetchOwnership(
-  supabase: SupabaseClient,
-  userId: string
-): Promise<OwnershipFetch> {
-  const full = await supabase
-    .from("user_collection")
-    .select("coin_id, quantity, grade, notes")
-    .eq("user_id", userId);
-
-  if (!full.error) {
-    const details: OwnershipMap = {};
-    for (const row of full.data ?? []) {
-      if (row.quantity > 0) details[row.coin_id] = toOwnership(row);
-    }
-    return { details, quantities: toCollectionMap(details) };
-  }
-
-  // Se la migration grade/notes non è stata eseguita, non rompere tutta
-  // l'app (e il pulsante +): si ripiega sulle sole quantità.
-  if (isMissingColumnError(full.error)) {
-    const lite = await supabase
-      .from("user_collection")
-      .select("coin_id, quantity")
-      .eq("user_id", userId);
-    if (lite.error) throw new Error(lite.error.message);
-    const details: OwnershipMap = {};
-    for (const row of lite.data ?? []) {
-      if (row.quantity > 0) details[row.coin_id] = toOwnership(row);
-    }
-    return { details, quantities: toCollectionMap(details) };
-  }
-
-  throw new Error(full.error.message);
-}
-
-/**
- * Anni posseduti per disegno (`coin_id -> { year: qty }`).
- * Se la tabella anni non esiste (migration_003 non eseguita) restituisce
- * mappa vuota invece di rompere le pagine: i chip anni risultano vuoti e
- * il toggle mostra il messaggio con la migration da eseguire.
- */
-export async function fetchYears(
-  supabase: SupabaseClient,
-  userId: string
-): Promise<CoinYearsMap> {
-  const { data, error } = await supabase
-    .from("user_collection_years")
-    .select("coin_id, year, quantity")
-    .eq("user_id", userId);
-  if (error) {
-    if (isMissingTableError(error)) return {};
-    throw new Error(error.message);
-  }
+/** Anni posseduti per disegno (`coin_id -> { year: qty }`). */
+export async function fetchYears(userId: string): Promise<CoinYearsMap> {
+  const rows = (await sql()`
+    SELECT coin_id, year, quantity
+    FROM public.user_collection_years
+    WHERE user_id = ${userId}
+  `) as unknown as YearRow[];
   const map: CoinYearsMap = {};
-  for (const row of data ?? []) {
+  for (const row of rows ?? []) {
     if (row.quantity > 0) {
       const perCoin = map[row.coin_id] ?? {};
       perCoin[row.year] = row.quantity;

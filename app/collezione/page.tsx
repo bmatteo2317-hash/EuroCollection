@@ -4,7 +4,7 @@ import {
   getCountriesWithCounts,
   getTotalCount,
 } from "@/lib/catalog";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth";
 import { fetchOwnership, fetchYears } from "@/lib/collection";
 import type {
   CoinYearsMap,
@@ -20,22 +20,18 @@ import CoinGrid from "@/components/CoinGrid";
 export const dynamic = "force-dynamic";
 
 export default async function CollezionePage() {
-  // Mai far crashare la rotta se le env mancano: senza utente → /login.
+  // Mai far crashare la rotta se il DB manca: senza utente → /login.
   // (redirect() lancia un'eccezione interna: va chiamato FUORI dal try.)
   let userId: string | null = null;
   let userEmail: string | null = null;
-  let supabase: Awaited<ReturnType<typeof createClient>> | null = null;
   try {
-    supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     userId = user?.id ?? null;
     userEmail = user?.email ?? null;
   } catch {
     userId = null;
   }
-  if (!userId || !supabase) redirect("/login");
+  if (!userId) redirect("/login");
 
   // Mai far crashare la pagina per un errore di lettura collezione:
   // un throw qui, durante la revalidazione scatenata da una Server Action
@@ -45,10 +41,10 @@ export default async function CollezionePage() {
   let details: OwnershipMap = {};
   let coinYears: CoinYearsMap = {};
   try {
-    const fetched = await fetchOwnership(supabase, userId);
+    const fetched = await fetchOwnership(userId);
     collection = fetched.quantities;
     details = fetched.details;
-    coinYears = await fetchYears(supabase, userId);
+    coinYears = await fetchYears(userId);
   } catch (e) {
     console.error("[collezione] lettura collezione fallita:", e);
   }

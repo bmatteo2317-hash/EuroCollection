@@ -1,47 +1,28 @@
 import { redirect } from "next/navigation";
 import AuthForm from "@/components/AuthForm";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth";
 
 // Legge la sessione via cookies(): rendering dinamico, mai prerender in build.
 export const dynamic = "force-dynamic";
 
-export default async function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ error?: string }>;
-}) {
+export default async function LoginPage() {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (user) redirect("/collezione");
   } catch {
-    // Env assenti o sessione illeggibile: mostra comunque il form di login.
+    // Sessione illeggibile: mostra comunque il form di login.
   }
-
-  const { error } = await searchParams;
-  const initialError =
-    error === "auth"
-      ? "Link non valido o scaduto: richiedi un nuovo magic link oppure accedi con la password."
-      : null;
 
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-6 py-10">
       <div className="text-center">
         <h1 className="text-3xl font-extrabold">Accedi 🪙</h1>
         <p className="mt-2 text-sm text-zinc-500">
-          Salva la tua collezione su Supabase. Puoi usare email + password
-          oppure ricevere un magic link.
+          Salva la tua collezione su Neon. Accedi con email + password
+          oppure crea un nuovo account.
         </p>
       </div>
-      <AuthForm initialError={initialError} />
-      <p className="text-xs text-zinc-400">
-        Configura l&apos;URL di redirect in Supabase → Authentication → URL
-        Configuration: aggiungi{" "}
-        <code>https://tuo-dominio.vercel.app/**</code> e{" "}
-        <code>http://localhost:3000/**</code>.
-      </p>
+      <AuthForm />
     </div>
   );
 }

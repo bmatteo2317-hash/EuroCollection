@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCatalog } from "@/lib/catalog";
-import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership, isMissingTableError } from "@/lib/collection";
+import { getSessionUser } from "@/lib/auth";
+import { sql, isMissingTableError } from "@/lib/db";
+import { fetchOwnership } from "@/lib/collection";
 import {
   ensureProfile,
   otherSide,
@@ -22,23 +23,20 @@ import SocialBoard, {
 export const dynamic = "force-dynamic";
 
 const MISSING_TABLES_MESSAGE =
-  "Manca la migration sociale su Supabase: esegui supabase/migration_005_social_trades.sql nel SQL Editor.";
+  "Manca lo schema sociale su Neon: esegui neon/schema.sql nel SQL Editor di Neon.";
 
 export default async function ScambiPage() {
   let userId: string | null = null;
   let userEmail: string | null = null;
-  let supabase: Awaited<ReturnType<typeof createClient>> | null = null;
   try {
-    supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     userId = user?.id ?? null;
     userEmail = user?.email ?? null;
   } catch {
     userId = null;
   }
-  if (!userId || !supabase) redirect("/login");
+  if (!userId) redirect("/login");
+  const meId = userId as string;
 
   let users: SocialUser[] = [];
   let friendships: Friendship[] = [];
@@ -52,64 +50,79 @@ export default async function ScambiPage() {
 
   try {
     try {
-      await ensureProfile(supabase, userId, userEmail);
+      await ensureProfile(meId, userEmail);
     } catch (e) {
       console.warn("[scambi] ensureProfile fallito:", e);
     }
 
-    const profRes = await supabase
-      .from("profiles")
-      .select("id, display_name")
-      .neq("id", userId)
-      .order("display_name")
-      .limit(50);
-    if (profRes.error) throw profRes.error;
+    const profRows = (await sql()`
+      SELECT id, display_name FROM public.profiles
+      WHERE id <> ${meId} ORDER BY display_name LIMIT 50
+    `) as unknown as { id: string; display_name: string }[];
     const nameById = new Map<string, string>();
-    for (const row of profRes.data ?? []) {
+    for (const row of profRows ?? []) {
       users.push({ id: row.id, displayName: row.display_name });
       nameById.set(row.id, row.display_name);
     }
 
-    const frRes = await supabase
-      .from("friendships")
-      .select("id, requester_id, addressee_id, status")
-      .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`);
-    if (frRes.error) throw frRes.error;
-    friendships = (frRes.data ?? []).map(toFriendship);
+    const frRows = (await sql()`
+      SELECT id, requester_id, addressee_id, status FROM public.friendships
+      WHERE requester_id = ${meId} OR addressee_id = ${meId}
+    `) as unknown as { id: string; requester_id: string; addressee_id: string; status: string }[];
+    friendships = (frRows ?? []).map(toFriendship);
 
-    const offRes = await supabase
-      .from("trade_offers")
-      .select("id, user_id, coin_id, year, quantity, grade, notes")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
-    if (offRes.error) throw offRes.error;
-    myOffers = (offRes.data ?? []).map(toTradeOffer);
+    const offRows = (await sql()`
+      SELECT id, user_id, coin_id, year, quantity, grade, notes FROM public.trade_offers
+      WHERE user_id = ${meId} ORDER BY created_at DESC
+    `) as unknown as {
+      id: string;
+      user_id: string;
+      coin_id: string;
+      year: number | null;
+      quantity: number;
+      grade: string | null;
+      notes: string | null;
+    }[];
+    myOffers = (offRows ?? []).map(toTradeOffer);
 
-    // Amici accettati + loro offerte (visibili grazie alla policy "amici").
+    // Amici accettati + loro offerte.
     const friendIds = [
       ...new Set(
         friendships
           .filter((f) => f.status === "accepted")
-          .map((f) => otherSide(f, userId as string))
+          .map((f) => otherSide(f, meId))
       ),
     ];
 
     // Richieste di scambio dove sono parte (inviate + ricevute).
-    const reqRes = await supabase
-      .from("trade_requests")
-      .select(
-        "id, proposer_id, addressee_id, offered_offer_id, requested_offer_id, offered_coin_id, offered_year, requested_coin_id, requested_year, accepted_offered_year, accepted_requested_year, message, status"
-      )
-      .or(`proposer_id.eq.${userId},addressee_id.eq.${userId}`)
-      .order("created_at", { ascending: false })
-      .limit(50);
-    if (reqRes.error) throw reqRes.error;
-    requests = (reqRes.data ?? []).map(toTradeRequest);
+    const reqRows = (await sql()`
+      SELECT id, proposer_id, addressee_id, offered_offer_id, requested_offer_id,
+        offered_coin_id, offered_year, requested_coin_id, requested_year,
+        accepted_offered_year, accepted_requested_year, message, status
+      FROM public.trade_requests
+      WHERE proposer_id = ${meId} OR addressee_id = ${meId}
+      ORDER BY created_at DESC LIMIT 50
+    `) as unknown as {
+      id: string;
+      proposer_id: string;
+      addressee_id: string;
+      offered_offer_id: string | null;
+      requested_offer_id: string | null;
+      offered_coin_id: string;
+      offered_year: number | null;
+      requested_coin_id: string;
+      requested_year: number | null;
+      accepted_offered_year: number | null;
+      accepted_requested_year: number | null;
+      message: string | null;
+      status: string;
+    }[];
+    requests = (reqRows ?? []).map(toTradeRequest);
 
     const counterpartIds = [
       ...new Set(
         requests.map((r) =>
-          r.proposerId === userId ? r.addresseeId : r.proposerId
+          r.proposerId === meId ? r.addresseeId : r.proposerId
         )
       ),
     ];
@@ -117,25 +130,28 @@ export default async function ScambiPage() {
       (id) => !nameById.has(id)
     );
     if (missingNames.length > 0) {
-      const namesRes = await supabase
-        .from("profiles")
-        .select("id, display_name")
-        .in("id", missingNames);
-      if (!namesRes.error) {
-        for (const row of namesRes.data ?? []) {
-          nameById.set(row.id, row.display_name);
-        }
+      const namesRows = (await sql()`
+        SELECT id, display_name FROM public.profiles WHERE id = ANY(${missingNames})
+      `) as unknown as { id: string; display_name: string }[];
+      for (const row of namesRows ?? []) {
+        nameById.set(row.id, row.display_name);
       }
     }
     if (friendIds.length > 0) {
-      const foRes = await supabase
-        .from("trade_offers")
-        .select("id, user_id, coin_id, year, quantity, grade, notes")
-        .in("user_id", friendIds)
-        .order("created_at", { ascending: false });
-      if (foRes.error) throw foRes.error;
+      const foRows = (await sql()`
+        SELECT id, user_id, coin_id, year, quantity, grade, notes FROM public.trade_offers
+        WHERE user_id = ANY(${friendIds}) ORDER BY created_at DESC
+      `) as unknown as {
+        id: string;
+        user_id: string;
+        coin_id: string;
+        year: number | null;
+        quantity: number;
+        grade: string | null;
+        notes: string | null;
+      }[];
       const byFriend = new Map<string, TradeOffer[]>();
-      for (const row of foRes.data ?? []) {
+      for (const row of foRows ?? []) {
         const offer = toTradeOffer(row);
         const list = byFriend.get(offer.userId) ?? [];
         list.push(offer);
@@ -162,7 +178,7 @@ export default async function ScambiPage() {
     ]);
     for (const id of referenced) coinLabels[id] = labelFor(id);
 
-    const { quantities } = await fetchOwnership(supabase, userId);
+    const { quantities } = await fetchOwnership(meId);
     ownedOptions = Object.keys(quantities)
       .map((id) => ({ id, label: `${labelFor(id)} · x${quantities[id]}` }))
       .sort((a, b) => a.label.localeCompare(b.label, "it"));
@@ -202,7 +218,7 @@ export default async function ScambiPage() {
       )}
 
       <SocialBoard
-        meId={userId}
+        meId={meId}
         users={users}
         friendships={friendships}
         myOffers={myOffers}

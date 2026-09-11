@@ -1,19 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
+import { requireSessionUser } from "@/lib/auth";
 import { toFriendship, type FriendshipStatus } from "@/lib/social";
 import { COLLECTION_LIMITS, isGrade } from "@/lib/types";
 
-type ServerSupabase = Awaited<ReturnType<typeof createClient>>;
-
-async function requireUserId() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("UNAUTHENTICATED");
-  return { supabase, userId: user.id };
+async function requireUserId(): Promise<string> {
+  const user = await requireSessionUser();
+  return user.id;
 }
 
 function touchScambi(): void {
@@ -32,27 +27,20 @@ interface FriendshipRow {
 }
 
 async function findPair(
-  supabase: ServerSupabase,
   a: string,
   b: string
 ): Promise<{ mine: FriendshipRow | null; theirs: FriendshipRow | null }> {
-  const mine = await supabase
-    .from("friendships")
-    .select("id, requester_id, addressee_id, status")
-    .eq("requester_id", a)
-    .eq("addressee_id", b)
-    .maybeSingle();
-  if (mine.error) throw new Error(mine.error.message);
-  const theirs = await supabase
-    .from("friendships")
-    .select("id, requester_id, addressee_id, status")
-    .eq("requester_id", b)
-    .eq("addressee_id", a)
-    .maybeSingle();
-  if (theirs.error) throw new Error(theirs.error.message);
+  const mineRows = (await sql()`
+    SELECT id, requester_id, addressee_id, status FROM public.friendships
+    WHERE requester_id = ${a} AND addressee_id = ${b} LIMIT 1
+  `) as unknown as FriendshipRow[];
+  const theirsRows = (await sql()`
+    SELECT id, requester_id, addressee_id, status FROM public.friendships
+    WHERE requester_id = ${b} AND addressee_id = ${a} LIMIT 1
+  `) as unknown as FriendshipRow[];
   return {
-    mine: (mine.data as FriendshipRow | null) ?? null,
-    theirs: (theirs.data as FriendshipRow | null) ?? null,
+    mine: mineRows[0] ?? null,
+    theirs: theirsRows[0] ?? null,
   };
 }
 
@@ -68,10 +56,10 @@ export interface FriendRequestResult {
 export async function sendFriendRequest(
   targetId: string
 ): Promise<FriendRequestResult> {
-  const { supabase, userId } = await requireUserId();
+  const userId = await requireUserId();
   if (targetId === userId) throw new Error("SELF");
 
-  const { mine, theirs } = await findPair(supabase, userId, targetId);
+  const { mine, theirs } = await findPair(userId, targetId);
 
   if (mine && mine.status === "accepted") {
     return { status: "accepted", friendshipId: mine.id };
@@ -81,13 +69,7 @@ export async function sendFriendRequest(
   }
   // Richiesta incrociata: accetto la sua (sono io il destinatario).
   if (theirs && theirs.status === "pending") {
-    const accepted = await supabase
-      .from("friendships")
-      .update({ status: "accepted" })
-      .eq("id", theirs.id)
-      .select("id, requester_id, addressee_id, status")
-      .maybeSingle();
-    if (accepted.error) throw new Error(accepted.error.message);
+    await sql()`UPDATE public.friendships SET status = 'accepted', updated_at = now() WHERE id = ${theirs.id}`;
     touchScambi();
     return { status: "accepted", friendshipId: theirs.id };
   }
@@ -96,26 +78,20 @@ export async function sendFriendRequest(
   }
   // Rifiuti precedenti: si riparte da una nuova richiesta.
   if (mine) {
-    const gone = await supabase.from("friendships").delete().eq("id", mine.id);
-    if (gone.error) throw new Error(gone.error.message);
+    await sql()`DELETE FROM public.friendships WHERE id = ${mine.id}`;
   }
   if (theirs) {
-    const gone = await supabase
-      .from("friendships")
-      .delete()
-      .eq("id", theirs.id);
-    if (gone.error) throw new Error(gone.error.message);
+    await sql()`DELETE FROM public.friendships WHERE id = ${theirs.id}`;
   }
 
-  const created = await supabase
-    .from("friendships")
-    .insert({ requester_id: userId, addressee_id: targetId, status: "pending" })
-    .select("id, requester_id, addressee_id, status")
-    .maybeSingle();
-  if (created.error) throw new Error(created.error.message);
-  if (!created.data) throw new Error("FRIENDSHIP_CREATE_FAILED");
+  const created = (await sql()`
+    INSERT INTO public.friendships (requester_id, addressee_id, status)
+    VALUES (${userId}, ${targetId}, 'pending')
+    RETURNING id
+  `) as unknown as { id: string }[];
+  if (!created[0]) throw new Error("FRIENDSHIP_CREATE_FAILED");
   touchScambi();
-  return { status: "pending", friendshipId: created.data.id };
+  return { status: "pending", friendshipId: created[0].id };
 }
 
 /**
@@ -126,24 +102,19 @@ export async function respondFriendRequest(
   friendshipId: string,
   accept: boolean
 ): Promise<FriendRequestResult> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("friendships")
-    .select("id, requester_id, addressee_id, status")
-    .eq("id", friendshipId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT id, requester_id, addressee_id, status FROM public.friendships
+    WHERE id = ${friendshipId} LIMIT 1
+  `) as unknown as FriendshipRow[];
+  const data = rows[0];
   if (!data) throw new Error("NOT_FOUND");
   const row = toFriendship(data);
   if (row.addresseeId !== userId) throw new Error("FORBIDDEN");
   if (row.status !== "pending") {
     return { status: row.status, friendshipId: row.id };
   }
-  const updated = await supabase
-    .from("friendships")
-    .update({ status: accept ? "accepted" : "declined" })
-    .eq("id", friendshipId);
-  if (updated.error) throw new Error(updated.error.message);
+  await sql()`UPDATE public.friendships SET status = ${accept ? "accepted" : "declined"}, updated_at = now() WHERE id = ${friendshipId}`;
   touchScambi();
   return {
     status: accept ? "accepted" : "declined",
@@ -156,23 +127,18 @@ export async function respondFriendRequest(
  * Richiede di essere parte della relazione.
  */
 export async function removeFriend(friendshipId: string): Promise<void> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("friendships")
-    .select("id, requester_id, addressee_id, status")
-    .eq("id", friendshipId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT id, requester_id, addressee_id, status FROM public.friendships
+    WHERE id = ${friendshipId} LIMIT 1
+  `) as unknown as FriendshipRow[];
+  const data = rows[0];
   if (!data) return;
   const row = toFriendship(data);
   if (row.requesterId !== userId && row.addresseeId !== userId) {
     throw new Error("FORBIDDEN");
   }
-  const removed = await supabase
-    .from("friendships")
-    .delete()
-    .eq("id", friendshipId);
-  if (removed.error) throw new Error(removed.error.message);
+  await sql()`DELETE FROM public.friendships WHERE id = ${friendshipId}`;
   touchScambi();
 }
 
@@ -192,77 +158,51 @@ export interface TradeOfferInput {
  * Richiede di possederla davvero (quantity >= 1 in collezione).
  */
 export async function addTradeOffer(input: TradeOfferInput): Promise<string> {
-  const { supabase, userId } = await requireUserId();
+  const userId = await requireUserId();
   const qty = clampOfferQty(input.quantity ?? 1);
   const notes =
     typeof input.notes === "string" && input.notes.trim()
       ? input.notes.trim().slice(0, COLLECTION_LIMITS.MAX_NOTES_LENGTH)
       : null;
 
-  const owned = await supabase
-    .from("user_collection")
-    .select("quantity, grade")
-    .eq("user_id", userId)
-    .eq("coin_id", input.coinId)
-    .maybeSingle();
-  if (owned.error) throw new Error(owned.error.message);
-  if (!owned.data || (owned.data.quantity ?? 0) <= 0) {
+  const owned = (await sql()`
+    SELECT quantity, grade FROM public.user_collection
+    WHERE user_id = ${userId} AND coin_id = ${input.coinId} LIMIT 1
+  `) as unknown as { quantity: number; grade: string | null }[];
+  if (!owned[0] || (owned[0].quantity ?? 0) <= 0) {
     throw new Error("NOT_OWNED");
   }
-  const grade = isGrade(owned.data.grade) ? owned.data.grade : null;
+  const grade = isGrade(owned[0].grade) ? owned[0].grade : null;
 
-  // Upsert manuale (l'indice unico usa coalesce(year,-1): onConflict su
-  // sole colonne non combacerebbe e Postgres risponderebbe 42P10).
-  const existing = await supabase
-    .from("trade_offers")
-    .select("id")
-    .eq("user_id", userId)
-    .eq("coin_id", input.coinId)
-    .is("year", null)
-    .maybeSingle();
-  if (existing.error) throw new Error(existing.error.message);
-  if (existing.data) {
-    const patch: { quantity: number; grade: string | null; notes?: string | null } = {
-      quantity: qty,
-      grade,
-    };
-    if (input.notes !== undefined) patch.notes = notes;
-    const updated = await supabase
-      .from("trade_offers")
-      .update(patch)
-      .eq("id", existing.data.id);
-    if (updated.error) throw new Error(updated.error.message);
+  // Un'offerta per (utente, moneta, anno NULL): cerca l'esistente.
+  const existing = (await sql()`
+    SELECT id FROM public.trade_offers
+    WHERE user_id = ${userId} AND coin_id = ${input.coinId} AND year IS NULL LIMIT 1
+  `) as unknown as { id: string }[];
+  if (existing[0]) {
+    if (input.notes !== undefined) {
+      await sql()`UPDATE public.trade_offers SET quantity = ${qty}, grade = ${grade}, notes = ${notes}, updated_at = now() WHERE id = ${existing[0].id}`;
+    } else {
+      await sql()`UPDATE public.trade_offers SET quantity = ${qty}, grade = ${grade}, updated_at = now() WHERE id = ${existing[0].id}`;
+    }
     touchScambi();
-    return existing.data.id;
+    return existing[0].id;
   }
 
-  const created = await supabase
-    .from("trade_offers")
-    .insert({
-      user_id: userId,
-      coin_id: input.coinId,
-      year: null,
-      quantity: qty,
-      grade,
-      notes,
-    })
-    .select("id")
-    .maybeSingle();
-  if (created.error) throw new Error(created.error.message);
-  if (!created.data) throw new Error("OFFER_CREATE_FAILED");
+  const created = (await sql()`
+    INSERT INTO public.trade_offers (user_id, coin_id, year, quantity, grade, notes)
+    VALUES (${userId}, ${input.coinId}, NULL, ${qty}, ${grade}, ${notes})
+    RETURNING id
+  `) as unknown as { id: string }[];
+  if (!created[0]) throw new Error("OFFER_CREATE_FAILED");
   touchScambi();
-  return created.data.id;
+  return created[0].id;
 }
 
 /** Ritira una propria offerta di scambio. */
 export async function removeTradeOffer(offerId: string): Promise<void> {
-  const { supabase, userId } = await requireUserId();
-  const removed = await supabase
-    .from("trade_offers")
-    .delete()
-    .eq("id", offerId)
-    .eq("user_id", userId);
-  if (removed.error) throw new Error(removed.error.message);
+  const userId = await requireUserId();
+  await sql()`DELETE FROM public.trade_offers WHERE id = ${offerId} AND user_id = ${userId}`;
   touchScambi();
 }
 
@@ -277,61 +217,44 @@ export interface ProposeTradeInput {
 
 /**
  * Propone uno scambio a un amico: la tua offerta per una sua offerta
- * (1 pezzo per parte). Le monete restano visibili nei nomi delle offerte
- * anche se le offerte vengono ritirate (snapshot su richiesta).
+ * (1 pezzo per parte). Snapshot moneta su richiesta anche se le offerte
+ * vengono ritirate.
  */
 export async function proposeTradeRequest(
   input: ProposeTradeInput
 ): Promise<string> {
-  const { supabase, userId } = await requireUserId();
+  const userId = await requireUserId();
   if (input.addresseeId === userId) throw new Error("SELF");
   const message =
     typeof input.message === "string" && input.message.trim()
       ? input.message.trim().slice(0, COLLECTION_LIMITS.MAX_NOTES_LENGTH)
       : null;
 
-  const mine = await supabase
-    .from("trade_offers")
-    .select("id, user_id, coin_id, year, quantity")
-    .eq("id", input.myOfferId)
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (mine.error) throw new Error(mine.error.message);
-  if (!mine.data || (mine.data.quantity ?? 0) < 1) {
+  const mine = (await sql()`
+    SELECT id, user_id, coin_id, year, quantity FROM public.trade_offers
+    WHERE id = ${input.myOfferId} AND user_id = ${userId} LIMIT 1
+  `) as unknown as { id: string; user_id: string; coin_id: string; year: number | null; quantity: number }[];
+  if (!mine[0] || (mine[0].quantity ?? 0) < 1) {
     throw new Error("OFFER_UNAVAILABLE");
   }
 
-  const theirs = await supabase
-    .from("trade_offers")
-    .select("id, user_id, coin_id, year, quantity")
-    .eq("id", input.theirOfferId)
-    .eq("user_id", input.addresseeId)
-    .maybeSingle();
-  if (theirs.error) throw new Error(theirs.error.message);
-  if (!theirs.data || (theirs.data.quantity ?? 0) < 1) {
+  const theirs = (await sql()`
+    SELECT id, user_id, coin_id, year, quantity FROM public.trade_offers
+    WHERE id = ${input.theirOfferId} AND user_id = ${input.addresseeId} LIMIT 1
+  `) as unknown as { id: string; user_id: string; coin_id: string; year: number | null; quantity: number }[];
+  if (!theirs[0] || (theirs[0].quantity ?? 0) < 1) {
     throw new Error("OFFER_UNAVAILABLE");
   }
 
-  const created = await supabase
-    .from("trade_requests")
-    .insert({
-      proposer_id: userId,
-      addressee_id: input.addresseeId,
-      offered_offer_id: mine.data.id,
-      requested_offer_id: theirs.data.id,
-      offered_coin_id: mine.data.coin_id,
-      offered_year: mine.data.year,
-      requested_coin_id: theirs.data.coin_id,
-      requested_year: theirs.data.year,
-      message,
-      status: "pending",
-    })
-    .select("id")
-    .maybeSingle();
-  if (created.error) throw new Error(created.error.message);
-  if (!created.data) throw new Error("REQUEST_CREATE_FAILED");
+  const created = (await sql()`
+    INSERT INTO public.trade_requests
+      (proposer_id, addressee_id, offered_offer_id, requested_offer_id, offered_coin_id, offered_year, requested_coin_id, requested_year, message, status)
+    VALUES (${userId}, ${input.addresseeId}, ${mine[0].id}, ${theirs[0].id}, ${mine[0].coin_id}, ${mine[0].year}, ${theirs[0].coin_id}, ${theirs[0].year}, ${message}, 'pending')
+    RETURNING id
+  `) as unknown as { id: string }[];
+  if (!created[0]) throw new Error("REQUEST_CREATE_FAILED");
   touchScambi();
-  return created.data.id;
+  return created[0].id;
 }
 
 /**
@@ -343,28 +266,20 @@ export async function respondTradeRequest(
   requestId: string,
   accept: boolean
 ): Promise<void> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("trade_requests")
-    .select("id, proposer_id, addressee_id, status")
-    .eq("id", requestId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT id, proposer_id, addressee_id, status FROM public.trade_requests
+    WHERE id = ${requestId} LIMIT 1
+  `) as unknown as { id: string; proposer_id: string; addressee_id: string; status: string }[];
+  const data = rows[0];
   if (!data) throw new Error("NOT_FOUND");
   if (data.addressee_id !== userId) throw new Error("FORBIDDEN");
   if (data.status !== "pending") throw new Error("STATE");
 
   if (accept) {
-    const agreed = await supabase.rpc("accept_trade_request", {
-      p_request_id: requestId,
-    });
-    if (agreed.error) throw new Error(agreed.error.message);
+    await sql()`SELECT public.accept_trade_request(${requestId}, ${userId})`;
   } else {
-    const declined = await supabase
-      .from("trade_requests")
-      .update({ status: "declined" })
-      .eq("id", requestId);
-    if (declined.error) throw new Error(declined.error.message);
+    await sql()`UPDATE public.trade_requests SET status = 'declined', updated_at = now() WHERE id = ${requestId}`;
   }
   touchScambi();
 }
@@ -375,23 +290,19 @@ export async function respondTradeRequest(
  * Fallisce con OFFER_UNAVAILABLE se un'offerta non esiste più.
  */
 export async function completeTradeRequest(requestId: string): Promise<void> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("trade_requests")
-    .select("id, proposer_id, addressee_id, status")
-    .eq("id", requestId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT id, proposer_id, addressee_id, status FROM public.trade_requests
+    WHERE id = ${requestId} LIMIT 1
+  `) as unknown as { id: string; proposer_id: string; addressee_id: string; status: string }[];
+  const data = rows[0];
   if (!data) throw new Error("NOT_FOUND");
   if (data.proposer_id !== userId && data.addressee_id !== userId) {
     throw new Error("FORBIDDEN");
   }
   if (data.status !== "accepted") throw new Error("STATE");
 
-  const done = await supabase.rpc("complete_trade_request", {
-    p_request_id: requestId,
-  });
-  if (done.error) throw new Error(done.error.message);
+  await sql()`SELECT public.complete_trade_request(${requestId}, ${userId})`;
 
   touchScambi();
   try {
@@ -407,13 +318,12 @@ export async function completeTradeRequest(requestId: string): Promise<void> {
  * non ancora completato (una delle due parti).
  */
 export async function cancelTradeRequest(requestId: string): Promise<void> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("trade_requests")
-    .select("id, proposer_id, addressee_id, status")
-    .eq("id", requestId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT id, proposer_id, addressee_id, status FROM public.trade_requests
+    WHERE id = ${requestId} LIMIT 1
+  `) as unknown as { id: string; proposer_id: string; addressee_id: string; status: string }[];
+  const data = rows[0];
   if (!data) return;
   if (data.status !== "pending" && data.status !== "accepted") {
     throw new Error("STATE");
@@ -428,32 +338,23 @@ export async function cancelTradeRequest(requestId: string): Promise<void> {
   ) {
     throw new Error("FORBIDDEN");
   }
-  const cancelled = await supabase
-    .from("trade_requests")
-    .update({ status: "cancelled" })
-    .eq("id", requestId);
-  if (cancelled.error) throw new Error(cancelled.error.message);
+  await sql()`UPDATE public.trade_requests SET status = 'cancelled', updated_at = now() WHERE id = ${requestId}`;
   touchScambi();
 }
 
 /** Elimina da cronologia una richiesta chiusa (non pending). */
 export async function deleteTradeRequest(requestId: string): Promise<void> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("trade_requests")
-    .select("id, proposer_id, addressee_id, status")
-    .eq("id", requestId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT id, proposer_id, addressee_id, status FROM public.trade_requests
+    WHERE id = ${requestId} LIMIT 1
+  `) as unknown as { id: string; proposer_id: string; addressee_id: string; status: string }[];
+  const data = rows[0];
   if (!data) return;
   if (data.proposer_id !== userId && data.addressee_id !== userId) {
     throw new Error("FORBIDDEN");
   }
   if (data.status === "pending") throw new Error("STATE");
-  const removed = await supabase
-    .from("trade_requests")
-    .delete()
-    .eq("id", requestId);
-  if (removed.error) throw new Error(removed.error.message);
+  await sql()`DELETE FROM public.trade_requests WHERE id = ${requestId}`;
   touchScambi();
 }

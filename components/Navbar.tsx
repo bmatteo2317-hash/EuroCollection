@@ -1,17 +1,13 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth";
+import { signOutAction } from "@/app/actions/auth";
 
 export default async function Navbar() {
   // Mai far crashare il layout (e quindi la build/prerender Next):
-  // senza env Supabase o senza sessione si mostra la versione guest.
+  // senza sessione si mostra la versione guest.
   let user: { id: string } | null = null;
   try {
-    const supabase = await createClient();
-    const {
-      data: { user: authUser },
-    } = await supabase.auth.getUser();
-    user = authUser;
+    user = await getSessionUser();
   } catch {
     user = null;
   }
@@ -42,17 +38,7 @@ export default async function Navbar() {
             Scambi
           </Link>
           {user ? (
-            <form
-              action={async () => {
-                "use server";
-                const { createClient } = await import(
-                  "@/lib/supabase/server"
-                );
-                const supabase = await createClient();
-                await supabase.auth.signOut();
-                redirect("/login");
-              }}
-            >
+            <form action={signOutAction}>
               <button className="rounded-full bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">
                 Esci
               </button>

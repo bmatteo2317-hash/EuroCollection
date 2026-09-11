@@ -2,7 +2,7 @@
   "name": "euro-collection-next",
   "version": "1.0.0",
   "private": true,
-  "description": "Catalogo monete Euro (Next.js App Router + @euro-coins/source) con collezione privata su Supabase. Deploy su Vercel.",
+  "description": "Catalogo monete Euro (Next.js App Router + @euro-coins/source) con collezione privata su Neon. Deploy su Vercel.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -12,8 +12,9 @@
   },
   "dependencies": {
     "@euro-coins/source": "^0.4.0",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.47.0",
+    "@neondatabase/serverless": "^1.1.0",
+    "bcryptjs": "^3.0.3",
+    "jose": "^6.2.12",
     "next": "^16.3.4",
     "react": "19.2.0",
     "react-dom": "19.2.0"

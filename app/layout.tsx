@@ -5,7 +5,7 @@ import Navbar from "@/components/Navbar";
 export const metadata: Metadata = {
   title: "EuroCollection — Catalogo e collezione monete Euro",
   description:
-    "Catalogo statico di tutte le monete euro (BCE) + collezione privata con Supabase. Italia, Finlandia, Germania e tutta l'Eurozona.",
+    "Catalogo statico di tutte le monete euro (BCE) + collezione privata con Neon. Italia, Finlandia, Germania e tutta l'Eurozona.",
 };
 
 export default function RootLayout({
@@ -22,7 +22,7 @@ export default function RootLayout({
         </main>
         <footer className="border-t border-zinc-200 py-6 text-center text-xs text-zinc-500 dark:border-zinc-800">
           Dati e immagini: Banca Centrale Europea via{" "}
-          <code>@euro-coins/source</code> · Collezione privata su Supabase ·
+          <code>@euro-coins/source</code> · Collezione privata su Neon ·
           Deploy su Vercel
         </footer>
       </body>

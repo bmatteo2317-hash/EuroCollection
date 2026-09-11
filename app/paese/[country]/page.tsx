@@ -7,14 +7,14 @@ import {
   getTotalCount,
   isValidCountry,
 } from "@/lib/catalog";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth";
 import { fetchOwnership, fetchYears } from "@/lib/collection";
 import CoinGrid from "@/components/CoinGrid";
 import CountryFlag from "@/components/CountryFlag";
 import type { CollectionMap, CoinYearsMap, OwnershipMap } from "@/lib/types";
 
 // Le pagine paese mostrano il possesso dell'utente loggato (cookies via
-// Supabase): rendering dinamico per-request. `generateStaticParams` resta
+// sessione): rendering dinamico per-request. `generateStaticParams` resta
 // come elenco di rotte valide per metadata/sitemap; l'HTML resta
 // server-rendered (ok per SEO) ma non prerenderizzato in build.
 export const dynamic = "force-dynamic";
@@ -53,22 +53,19 @@ export default async function PaesePage({
   let ownedHere = 0;
   let isGuest = true;
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (user) {
       isGuest = false;
-      const fetched = await fetchOwnership(supabase, user.id);
+      const fetched = await fetchOwnership(user.id);
       collection = fetched.quantities;
       details = fetched.details;
-      coinYears = await fetchYears(supabase, user.id);
+      coinYears = await fetchYears(user.id);
       for (const id of Object.keys(collection)) {
         if (id.startsWith(`${country}-`)) ownedHere += 1;
       }
     }
   } catch {
-    // Build senza env: pagina comunque consultabile da guest
+    // Build senza DB: pagina comunque consultabile da guest
   }
 
   const pct = coins.length

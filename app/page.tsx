@@ -4,7 +4,7 @@ import {
   getCountriesWithCounts,
   getTotalCount,
 } from "@/lib/catalog";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth";
 import { fetchOwnership, fetchYears } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CountryExplorer from "@/components/CountryExplorer";
@@ -13,7 +13,7 @@ import type { CollectionMap, CoinYearsMap, OwnershipMap } from "@/lib/types";
 
 // Pagina personalizzata (mostra il progresso dell'utente loggato):
 // deve essere renderizzata dinamicamente, non prerenderizzata in build
-// (usa cookies() via Supabase). Il catalogo resta economico da calcolare
+// (usa cookies() via sessione). Il catalogo resta economico da calcolare
 // per-request (~879 monete da dati statici del package).
 export const dynamic = "force-dynamic";
 
@@ -30,20 +30,17 @@ export default async function Home() {
   let owned = 0;
   let userEmail: string | null = null;
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const user = await getSessionUser();
     if (user) {
       userEmail = user.email ?? null;
-      const fetched = await fetchOwnership(supabase, user.id);
+      const fetched = await fetchOwnership(user.id);
       collection = fetched.quantities;
       details = fetched.details;
-      coinYears = await fetchYears(supabase, user.id);
+      coinYears = await fetchYears(user.id);
       owned = Object.keys(collection).length;
     }
   } catch {
-    // Env Supabase assenti in build: la home resta consultabile da guest
+    // DB assente in build o sessione illeggibile: home consultabile da guest
   }
 
   return (
@@ -58,7 +55,7 @@ export default async function Home() {
           <p className="mt-3 max-w-lg text-sm leading-6 text-zinc-600 dark:text-zinc-300">
             Catalogo statico generato da <code>@euro-coins/source</code>{" "}
             (immagini ufficiali BCE, {total} monete) + collezione privata
-            salvata su Supabase. Le monete non possedute sono in bianco e
+            salvata su Neon. Le monete non possedute sono in bianco e
             nero, quelle possedute si colorano e mostrano il badge{" "}
             <strong>x2</strong>.
           </p>

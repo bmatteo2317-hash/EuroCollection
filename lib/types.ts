@@ -4,7 +4,7 @@
  * `coin_id` è l'ID stabile generato da `coinId()` in `lib/catalog.ts`
  * (formato "<country>-<year>-<denomination>-<type>-<index>",
  * es. "it-2004-2euro-commemorative-0") e corrisponde alla chiave primaria
- * logica della tabella Supabase `public.user_collection (user_id, coin_id)`.
+ * logica della tabella Neon `public.user_collection (user_id, coin_id)`.
  */
 
 /** Mappa `coin_id -> quantity` usata dalla UI (anche ottimistica). */

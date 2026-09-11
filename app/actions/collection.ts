@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
-import { fetchOwnership, fetchYears, isMissingColumnError, isMissingTableError, MISSING_COLUMNS_MESSAGE, MISSING_YEARS_TABLE_MESSAGE } from "@/lib/collection";
+import { sql, MISSING_TABLES_MESSAGE } from "@/lib/db";
+import { requireSessionUser } from "@/lib/auth";
+import { fetchOwnership, fetchYears } from "@/lib/collection";
 import { isValidCountry } from "@/lib/catalog";
 import {
   COLLECTION_LIMITS,
@@ -15,8 +16,6 @@ import {
   type QuantityUpdateResult,
 } from "@/lib/types";
 
-type ServerSupabase = Awaited<ReturnType<typeof createClient>>;
-
 function clampQuantity(qty: number): number {
   if (!Number.isFinite(qty)) return 0;
   return Math.max(
@@ -25,13 +24,9 @@ function clampQuantity(qty: number): number {
   );
 }
 
-async function requireUserId() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("UNAUTHENTICATED");
-  return { supabase, userId: user.id };
+async function requireUserId(): Promise<string> {
+  const user = await requireSessionUser();
+  return user.id;
 }
 
 function revalidateCollectionPaths(coinId?: string): void {
@@ -54,11 +49,9 @@ function revalidateCollectionPaths(coinId?: string): void {
 }
 
 /**
- * Scrive la quantità con UN SOLO client autenticato (niente doppia getUser):
- * qty <= 0 → DELETE, qty > 0 → UPSERT su (user_id, coin_id).
+ * Scrive la quantità: qty <= 0 → DELETE, qty > 0 → UPSERT su (user_id, coin_id).
  */
 async function applyQuantity(
-  supabase: ServerSupabase,
   userId: string,
   coinId: string,
   qty: number
@@ -66,18 +59,14 @@ async function applyQuantity(
   const clean = clampQuantity(qty);
 
   if (clean <= 0) {
-    const { error } = await supabase
-      .from("user_collection")
-      .delete()
-      .eq("user_id", userId)
-      .eq("coin_id", coinId);
-    if (error) throw new Error(error.message);
+    await sql()`DELETE FROM public.user_collection WHERE user_id = ${userId} AND coin_id = ${coinId}`;
   } else {
-    const { error } = await supabase.from("user_collection").upsert(
-      { user_id: userId, coin_id: coinId, quantity: clean },
-      { onConflict: "user_id,coin_id" }
-    );
-    if (error) throw new Error(error.message);
+    await sql()`
+      INSERT INTO public.user_collection (user_id, coin_id, quantity)
+      VALUES (${userId}, ${coinId}, ${clean})
+      ON CONFLICT (user_id, coin_id)
+      DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
+    `;
   }
 
   revalidateCollectionPaths(coinId);
@@ -86,14 +75,12 @@ async function applyQuantity(
 
 /** Collezione dell'utente loggato: { [coin_id]: quantity }. */
 export async function getMyCollection(): Promise<CollectionMap> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("user_collection")
-    .select("coin_id, quantity")
-    .eq("user_id", userId);
-  if (error) throw new Error(error.message);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT coin_id, quantity FROM public.user_collection WHERE user_id = ${userId}
+  `) as unknown as { coin_id: string; quantity: number }[];
   const map: CollectionMap = {};
-  for (const row of data ?? []) {
+  for (const row of rows ?? []) {
     if (row.quantity > 0) map[row.coin_id] = row.quantity;
   }
   return map;
@@ -107,59 +94,46 @@ export async function setCoinQuantity(
   coinId: string,
   qty: number
 ): Promise<QuantityUpdateResult> {
-  const { supabase, userId } = await requireUserId();
-  return applyQuantity(supabase, userId, coinId, qty);
+  const userId = await requireUserId();
+  return applyQuantity(userId, coinId, qty);
 }
 
-/**
- * Incrementa di 1 la quantità posseduta.
- * Legge il valore corrente dal DB (nessuna race sul client),
- * poi riusa `setCoinQuantity` per upsert + revalidate.
- */
+/** Incrementa di 1 la quantità posseduta (lettura + upsert). */
 export async function incrementCoin(
   coinId: string
 ): Promise<QuantityUpdateResult> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("user_collection")
-    .select("quantity")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  const current = data?.quantity ?? 0;
-  return applyQuantity(supabase, userId, coinId, current + 1);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT quantity FROM public.user_collection
+    WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
+  `) as unknown as { quantity: number }[];
+  const current = rows[0]?.quantity ?? 0;
+  return applyQuantity(userId, coinId, current + 1);
 }
 
-/**
- * Decrementa di 1 la quantità posseduta.
- * A zero esegue DELETE così la moneta torna "non posseduta" in UI.
- */
+/** Decrementa di 1 (a zero esegue DELETE). */
 export async function decrementCoin(
   coinId: string
 ): Promise<QuantityUpdateResult> {
-  const { supabase, userId } = await requireUserId();
-  const { data, error } = await supabase
-    .from("user_collection")
-    .select("quantity")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  const current = data?.quantity ?? 0;
-  return applyQuantity(supabase, userId, coinId, current - 1);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT quantity FROM public.user_collection
+    WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
+  `) as unknown as { quantity: number }[];
+  const current = rows[0]?.quantity ?? 0;
+  return applyQuantity(userId, coinId, current - 1);
 }
 
 /** Dettagli completi (quantità + grado + note) dell'utente loggato. */
 export async function getMyOwnership(): Promise<OwnershipMap> {
-  const { supabase, userId } = await requireUserId();
-  return (await fetchOwnership(supabase, userId)).details;
+  const userId = await requireUserId();
+  return (await fetchOwnership(userId)).details;
 }
 
 /** Anni posseduti per disegno (`coin_id -> { year: qty }`). */
 export async function getMyYears(): Promise<CoinYearsMap> {
-  const { supabase, userId } = await requireUserId();
-  return fetchYears(supabase, userId);
+  const userId = await requireUserId();
+  return fetchYears(userId);
 }
 
 export interface ToggleYearResult {
@@ -182,29 +156,24 @@ function cleanYear(year: number): number {
 }
 
 /**
- * Somma i pezzi posseduti di un disegno (SOMMA quantity, non conteggio
- * righe: così i doppioni dello stesso anno contano) e sincronizza la riga
- * principale `user_collection.quantity` (include revalidate dei path).
- * Ritorna { distinti, pezzi }.
+ * Somma i pezzi posseduti di un disegno (SOMMA quantity) e sincronizza la
+ * riga principale `user_collection.quantity`. Ritorna { distinti, pezzi }.
  */
 async function syncMainRowFromYears(
-  supabase: ServerSupabase,
   userId: string,
   coinId: string
 ): Promise<{ ownedYears: number; totalPieces: number }> {
-  const owned = await supabase
-    .from("user_collection_years")
-    .select("quantity")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId);
-  if (owned.error) throw new Error(owned.error.message);
-  const rows = owned.data ?? [];
-  const ownedYears = rows.filter((r) => (r.quantity ?? 0) > 0).length;
-  const totalPieces = rows.reduce(
+  const rows = (await sql()`
+    SELECT quantity FROM public.user_collection_years
+    WHERE user_id = ${userId} AND coin_id = ${coinId}
+  `) as unknown as { quantity: number }[];
+  const list = rows ?? [];
+  const ownedYears = list.filter((r) => (r.quantity ?? 0) > 0).length;
+  const totalPieces = list.reduce(
     (sum, r) => sum + Math.max(0, r.quantity ?? 0),
     0
   );
-  await applyQuantity(supabase, userId, coinId, totalPieces);
+  await applyQuantity(userId, coinId, totalPieces);
   return { ownedYears, totalPieces };
 }
 
@@ -220,36 +189,25 @@ export async function setCoinYearQuantity(
 ): Promise<ToggleYearResult> {
   const y = cleanYear(year);
   const clean = clampQuantity(qty);
-  const { supabase, userId } = await requireUserId();
+  const userId = await requireUserId();
 
-  if (clean <= 0) {
-    const removed = await supabase
-      .from("user_collection_years")
-      .delete()
-      .eq("user_id", userId)
-      .eq("coin_id", coinId)
-      .eq("year", y);
-    if (removed.error) {
-      if (isMissingTableError(removed.error)) {
-        throw new Error(MISSING_YEARS_TABLE_MESSAGE);
-      }
-      throw new Error(removed.error.message);
+  try {
+    if (clean <= 0) {
+      await sql()`DELETE FROM public.user_collection_years WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
+    } else {
+      await sql()`
+        INSERT INTO public.user_collection_years (user_id, coin_id, year, quantity)
+        VALUES (${userId}, ${coinId}, ${y}, ${clean})
+        ON CONFLICT (user_id, coin_id, year)
+        DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
+      `;
     }
-  } else {
-    const saved = await supabase.from("user_collection_years").upsert(
-      { user_id: userId, coin_id: coinId, year: y, quantity: clean },
-      { onConflict: "user_id,coin_id,year" }
-    );
-    if (saved.error) {
-      if (isMissingTableError(saved.error)) {
-        throw new Error(MISSING_YEARS_TABLE_MESSAGE);
-      }
-      throw new Error(saved.error.message);
-    }
+  } catch (e) {
+    console.error("[collection] setCoinYearQuantity fallita:", e);
+    throw new Error(MISSING_TABLES_MESSAGE);
   }
 
   const { ownedYears, totalPieces } = await syncMainRowFromYears(
-    supabase,
     userId,
     coinId
   );
@@ -262,21 +220,12 @@ export async function incrementCoinYear(
   year: number
 ): Promise<ToggleYearResult> {
   const y = cleanYear(year);
-  const { supabase, userId } = await requireUserId();
-  const current = await supabase
-    .from("user_collection_years")
-    .select("quantity")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId)
-    .eq("year", y)
-    .maybeSingle();
-  if (current.error) {
-    if (isMissingTableError(current.error)) {
-      throw new Error(MISSING_YEARS_TABLE_MESSAGE);
-    }
-    throw new Error(current.error.message);
-  }
-  return setCoinYearQuantity(coinId, y, (current.data?.quantity ?? 0) + 1);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT quantity FROM public.user_collection_years
+    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+  `) as unknown as { quantity: number }[];
+  return setCoinYearQuantity(coinId, y, (rows[0]?.quantity ?? 0) + 1);
 }
 
 /** −1 pezzo di un anno (a zero l'anno viene rimosso). */
@@ -285,80 +234,43 @@ export async function decrementCoinYear(
   year: number
 ): Promise<ToggleYearResult> {
   const y = cleanYear(year);
-  const { supabase, userId } = await requireUserId();
-  const current = await supabase
-    .from("user_collection_years")
-    .select("quantity")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId)
-    .eq("year", y)
-    .maybeSingle();
-  if (current.error) {
-    if (isMissingTableError(current.error)) {
-      throw new Error(MISSING_YEARS_TABLE_MESSAGE);
-    }
-    throw new Error(current.error.message);
-  }
-  return setCoinYearQuantity(coinId, y, (current.data?.quantity ?? 0) - 1);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT quantity FROM public.user_collection_years
+    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+  `) as unknown as { quantity: number }[];
+  return setCoinYearQuantity(coinId, y, (rows[0]?.quantity ?? 0) - 1);
 }
 
 /**
  * Spunta / deseleziona un anno di un disegno divisionale (toggle 0 ↔ 1).
- * Mantenuta per compatibilità: per i doppioni usare
- * `setCoinYearQuantity` / `incrementCoinYear` / `decrementCoinYear`.
- * La riga principale (`user_collection`) viene sincronizzata dal server:
- * quantità = SOMMA dei pezzi di tutti gli anni (doppioni inclusi), così
- * badge, filtri, statistiche e dashboard restano coerenti.
+ * La riga principale viene sincronizzata = SOMMA dei pezzi di tutti gli anni.
  */
 export async function toggleCoinYear(
   coinId: string,
   year: number
 ): Promise<ToggleYearResult> {
   const y = cleanYear(year);
-  const { supabase, userId } = await requireUserId();
+  const userId = await requireUserId();
 
-  const current = await supabase
-    .from("user_collection_years")
-    .select("quantity")
-    .eq("user_id", userId)
-    .eq("coin_id", coinId)
-    .eq("year", y)
-    .maybeSingle();
-  if (current.error) {
-    if (isMissingTableError(current.error)) {
-      throw new Error(MISSING_YEARS_TABLE_MESSAGE);
-    }
-    throw new Error(current.error.message);
-  }
+  const rows = (await sql()`
+    SELECT quantity FROM public.user_collection_years
+    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+  `) as unknown as { quantity: number }[];
+  const has = (rows[0]?.quantity ?? 0) > 0;
 
-  // Delega a setCoinYearQuantity così insert/delete + sync somma restano
-  // in un unico posto (evita il vecchio bug: sync = count righe).
-  const has = (current.data?.quantity ?? 0) > 0;
-  // setCoinYearQuantity ricrea client/utente: riuso diretto qui per
-  // singola connessione, poi sync somma-pezzi.
   if (has) {
-    const removed = await supabase
-      .from("user_collection_years")
-      .delete()
-      .eq("user_id", userId)
-      .eq("coin_id", coinId)
-      .eq("year", y);
-    if (removed.error) throw new Error(removed.error.message);
+    await sql()`DELETE FROM public.user_collection_years WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
   } else {
-    const added = await supabase.from("user_collection_years").upsert(
-      { user_id: userId, coin_id: coinId, year: y, quantity: 1 },
-      { onConflict: "user_id,coin_id,year" }
-    );
-    if (added.error) {
-      if (isMissingTableError(added.error)) {
-        throw new Error(MISSING_YEARS_TABLE_MESSAGE);
-      }
-      throw new Error(added.error.message);
-    }
+    await sql()`
+      INSERT INTO public.user_collection_years (user_id, coin_id, year, quantity)
+      VALUES (${userId}, ${coinId}, ${y}, 1)
+      ON CONFLICT (user_id, coin_id, year)
+      DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
+    `;
   }
 
   const { ownedYears, totalPieces } = await syncMainRowFromYears(
-    supabase,
     userId,
     coinId
   );
@@ -393,21 +305,21 @@ export async function updateCoinDetails(
   coinId: string,
   input: CoinDetailsInput
 ): Promise<CoinDetailsResult> {
-  const { supabase, userId } = await requireUserId();
+  const userId = await requireUserId();
   const patch: { grade?: Grade | null; notes?: string | null } = {};
   if (input.grade !== undefined) patch.grade = cleanGrade(input.grade);
   if (input.notes !== undefined) patch.notes = cleanNotes(input.notes);
+
+  const readRows = async () => {
+    const rows = (await sql()`
+      SELECT quantity, grade, notes FROM public.user_collection
+      WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
+    `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
+    return rows[0] ?? null;
+  };
+
   if (Object.keys(patch).length === 0) {
-    const { data, error } = await supabase
-      .from("user_collection")
-      .select("quantity, grade, notes")
-      .eq("user_id", userId)
-      .eq("coin_id", coinId)
-      .maybeSingle();
-    if (error) {
-      if (isMissingColumnError(error)) throw new Error(MISSING_COLUMNS_MESSAGE);
-      throw new Error(error.message);
-    }
+    const data = await readRows();
     if (!data || data.quantity <= 0) return { coinId, ownership: null };
     return {
       coinId,
@@ -419,18 +331,15 @@ export async function updateCoinDetails(
     };
   }
 
-  const { data, error } = await supabase
-    .from("user_collection")
-    .update(patch)
-    .eq("user_id", userId)
-    .eq("coin_id", coinId)
-    .gt("quantity", 0)
-    .select("quantity, grade, notes")
-    .maybeSingle();
-  if (error) {
-    if (isMissingColumnError(error)) throw new Error(MISSING_COLUMNS_MESSAGE);
-    throw new Error(error.message);
-  }
+  const grade = patch.grade ?? null;
+  const notes = patch.notes ?? null;
+  const updated = (await sql()`
+    UPDATE public.user_collection
+    SET grade = ${grade}, notes = ${notes}, updated_at = now()
+    WHERE user_id = ${userId} AND coin_id = ${coinId} AND quantity > 0
+    RETURNING quantity, grade, notes
+  `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
+  const data = updated[0] ?? null;
   if (!data) throw new Error("NOT_OWNED");
 
   revalidateCollectionPaths(coinId);
@@ -442,4 +351,44 @@ export async function updateCoinDetails(
       notes: data.notes ?? null,
     },
   };
+}
+
+/** Dettagli di un anno specifico (grado + note del singolo anno). */
+export async function getCoinYearDetails(
+  coinId: string,
+  year: number
+): Promise<{ grade: Grade | null; notes: string | null; quantity: number }> {
+  const y = cleanYear(year);
+  const userId = await requireUserId();
+  const rows = (await sql()`
+    SELECT quantity, grade, notes FROM public.user_collection_years
+    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+  `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
+  const row = rows[0];
+  if (!row) return { grade: null, notes: null, quantity: 0 };
+  return {
+    grade: isGrade(row.grade) ? row.grade : null,
+    notes: row.notes ?? null,
+    quantity: row.quantity,
+  };
+}
+
+/** Aggiorna grado + note di un singolo anno posseduto. */
+export async function updateCoinYearDetails(
+  coinId: string,
+  year: number,
+  input: CoinDetailsInput
+): Promise<void> {
+  const y = cleanYear(year);
+  const userId = await requireUserId();
+  const grade = input.grade !== undefined ? cleanGrade(input.grade) : undefined;
+  const notes = input.notes !== undefined ? cleanNotes(input.notes) : undefined;
+  if (grade !== undefined && notes !== undefined) {
+    await sql()`UPDATE public.user_collection_years SET grade = ${grade}, notes = ${notes}, updated_at = now() WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
+  } else if (grade !== undefined) {
+    await sql()`UPDATE public.user_collection_years SET grade = ${grade}, updated_at = now() WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
+  } else if (notes !== undefined) {
+    await sql()`UPDATE public.user_collection_years SET notes = ${notes}, updated_at = now() WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
+  }
+  revalidateCollectionPaths(coinId);
 }

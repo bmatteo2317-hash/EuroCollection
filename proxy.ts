@@ -1,13 +1,11 @@
-import type { NextRequest } from "next/server";
-import { updateSession } from "@/lib/supabase/middleware";
-
-// Next 16+: la convention "middleware.ts" è deprecata in favore di "proxy.ts".
-export default async function proxy(request: NextRequest) {
-  return await updateSession(request);
+// Su Neon non c'è una sessione Supabase da rinfrescare via middleware:
+// l'autenticazione è un cookie JWT httpOnly letto nei Server Component
+// e nelle Server Action (lib/auth.ts). Questo proxy resta come no-op
+// per future esigenze (redirect, header di sicurezza).
+export default async function proxy() {
+  return;
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
-  ],
+  matcher: [],
 };
