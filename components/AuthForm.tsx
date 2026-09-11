@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { signInAction, signUpAction } from "@/app/actions/auth";
 
 export default function AuthForm({
@@ -8,6 +9,7 @@ export default function AuthForm({
 }: {
   initialError?: string | null;
 }) {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -19,6 +21,12 @@ export default function AuthForm({
     return e instanceof Error ? e.message : "Operazione non riuscita.";
   }
 
+  /** A successo naviga alla home (il cookie di sessione è già stato scritto). */
+  function goHome(): void {
+    router.push("/");
+    router.refresh();
+  }
+
   async function signIn(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -26,9 +34,8 @@ export default function AuthForm({
     setMsg(null);
     try {
       await signInAction(email, password);
+      goHome();
     } catch (e: unknown) {
-      // redirect() delle Server Action lancia NEXT_REDIRECT: non è un errore.
-      if (e instanceof Error && /NEXT_REDIRECT/i.test(e.message)) throw e;
       setErr(toDetail(e));
     } finally {
       setLoading(false);
@@ -41,10 +48,10 @@ export default function AuthForm({
     setErr(null);
     setMsg(null);
     try {
-      setMsg("Account creato! Accesso in corso…");
       await signUpAction(email, password);
+      setMsg("Account creato! Accesso in corso…");
+      goHome();
     } catch (e: unknown) {
-      if (e instanceof Error && /NEXT_REDIRECT/i.test(e.message)) throw e;
       setMsg(null);
       setErr(toDetail(e));
     } finally {
@@ -54,7 +61,7 @@ export default function AuthForm({
 
   return (
     <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <form className="flex flex-col gap-3">
+      <form className="flex flex-col gap-3" onSubmit={signIn}>
         <input
           type="email"
           required
@@ -98,13 +105,14 @@ export default function AuthForm({
         </div>
         <div className="flex gap-2">
           <button
-            onClick={signIn}
+            type="submit"
             disabled={loading}
             className="flex-1 rounded-xl bg-zinc-900 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
           >
             {loading ? "…" : "Accedi"}
           </button>
           <button
+            type="button"
             onClick={signUp}
             disabled={loading}
             className="flex-1 rounded-xl border border-zinc-300 py-2 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
