@@ -49,7 +49,7 @@ export default function RootLayout({
         <footer className="border-t border-zinc-200 py-6 text-center text-xs text-zinc-500 dark:border-zinc-800">
           Dati e immagini: Banca Centrale Europea via{" "}
           <code>@euro-coins/source</code> · Collezione privata su Neon ·
-          Deploy su Vercel
+          Deploy su Vercel ⚡
         </footer>
       </body>
     </html>
