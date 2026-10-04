@@ -1,15 +1,13 @@
 import Link from "next/link";
-import { getSessionUser } from "@/lib/auth";
-import { signOutAction } from "@/app/actions/auth";
+import { getDisplayName } from "@/app/actions/profile";
 
 export default async function Navbar() {
-  // Mai far crashare il layout (e quindi la build/prerender Next):
-  // senza sessione si mostra la versione guest.
-  let user: { id: string } | null = null;
+  // Mai far crashare il layout: senza nome si mostra "Profilo".
+  let name: string | null = null;
   try {
-    user = await getSessionUser();
+    name = await getDisplayName();
   } catch {
-    user = null;
+    name = null;
   }
 
   return (
@@ -37,20 +35,12 @@ export default async function Navbar() {
           >
             Scambi
           </Link>
-          {user ? (
-            <form action={signOutAction}>
-              <button className="rounded-full bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">
-                Esci
-              </button>
-            </form>
-          ) : (
-            <Link
-              href="/login"
-              className="rounded-full bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-            >
-              Accedi
-            </Link>
-          )}
+          <Link
+            href="/profilo"
+            className="rounded-full bg-zinc-900 px-3 py-1.5 font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            {name ? `👤 ${name}` : "👤 Profilo"}
+          </Link>
         </div>
       </nav>
     </header>

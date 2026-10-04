@@ -4,7 +4,7 @@ import {
   getCountriesWithCounts,
   getTotalCount,
 } from "@/lib/catalog";
-import { getSessionUser } from "@/lib/auth";
+import { getDeviceUserId } from "@/lib/auth";
 import { fetchOwnershipSafe, fetchYearsSafe } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CountryExplorer from "@/components/CountryExplorer";
@@ -23,25 +23,20 @@ export default async function Home() {
   const catalog = getCatalog();
   const commemoratives = catalog.filter((c) => c.isCommemorative).slice(0, 10);
 
-  // Collezione utente (se loggato) per statistiche + UI ottimistica in home
+  // Collezione del dispositivo per statistiche + UI in home.
+  // Niente login: il primo + crea da solo l'account (provision lazy).
   let collection: CollectionMap = {};
   let details: OwnershipMap = {};
   let coinYears: CoinYearsMap = {};
   let owned = 0;
-  let userEmail: string | null = null;
-  try {
-    const user = await getSessionUser();
-    if (user) {
-      userEmail = user.email ?? null;
-      // Versioni Safe: MAI throw (un throw qui = pagina #441 in produzione).
-      const fetched = await fetchOwnershipSafe(user.id);
-      collection = fetched.quantities;
-      details = fetched.details;
-      coinYears = await fetchYearsSafe(user.id);
-      owned = Object.keys(collection).length;
-    }
-  } catch {
-    // Sessione illeggibile: home consultabile da guest
+  const deviceId = await getDeviceUserId();
+  if (deviceId) {
+    // Versioni Safe: MAI throw (un throw qui = pagina #441 in produzione).
+    const fetched = await fetchOwnershipSafe(deviceId);
+    collection = fetched.quantities;
+    details = fetched.details;
+    coinYears = await fetchYearsSafe(deviceId);
+    owned = Object.keys(collection).length;
   }
 
   return (
@@ -67,15 +62,12 @@ export default async function Home() {
             >
               📊 La mia dashboard
             </Link>
-            {!userEmail && (
-              <Link
-                id="login-hint"
-                href="/login"
-                className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                Accedi per salvare la collezione
-              </Link>
-            )}
+            <Link
+              href="/profilo"
+              className="rounded-full border border-zinc-300 px-4 py-2 text-sm font-semibold hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              👤 Personalizza il profilo
+            </Link>
           </div>
         </div>
         <div className="flex items-center justify-start lg:justify-end">
@@ -110,7 +102,7 @@ export default async function Home() {
           initialCollection={collection}
           initialDetails={details}
           initialYears={coinYears}
-          isGuest={!userEmail}
+          isGuest={false}
         />
       </section>
     </div>

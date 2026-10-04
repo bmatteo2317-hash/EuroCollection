@@ -1,7 +1,7 @@
 -- ============================================================
 -- Euro Collection — schema completo da zero per Neon (Postgres)
 -- Esegui tutto nel Neon Console → SQL Editor → Run.
--- Auth: tabella public.users con password hashata (bcrypt, lato app).
+-- Auth: tabella public.users (una riga per dispositivo, senza password).
 -- Sessione: cookie JWT firmato lato app (lib/auth.ts), nessun
 -- componente DB. I controlli "solo proprietario / solo amici"
 -- sono applicati nelle query/funzioni con user_id esplicito.

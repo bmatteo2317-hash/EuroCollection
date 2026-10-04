@@ -143,20 +143,15 @@ export function otherSide(f: Friendship, meId: string): string {
 
 /**
  * Crea il profilo pubblico se manca (il trigger on_user_created lo crea
- * già alla registrazione: questo è solo un fallback per utenti esistenti).
+ * già alla registrazione: questo è solo un fallback).
  */
-export async function ensureProfile(
-  userId: string,
-  email: string | null
-): Promise<void> {
+export async function ensureProfile(userId: string): Promise<void> {
   try {
     const found = (await sql()`
       SELECT id FROM public.profiles WHERE id = ${userId} LIMIT 1
     `) as unknown as { id: string }[];
     if (found.length > 0) return;
-    const base =
-      (email?.split("@")[0] ?? "collezionista").slice(0, 40) || "collezionista";
-    await sql()`INSERT INTO public.profiles (id, display_name) VALUES (${userId}, ${base}) ON CONFLICT (id) DO NOTHING`;
+    await sql()`INSERT INTO public.profiles (id, display_name) VALUES (${userId}, 'Collezionista') ON CONFLICT (id) DO NOTHING`;
   } catch (e) {
     throw toFriendlyDbError(e, "Profilo non disponibile: riprova tra poco.");
   }

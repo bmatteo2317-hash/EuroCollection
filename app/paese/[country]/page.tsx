@@ -7,7 +7,7 @@ import {
   getTotalCount,
   isValidCountry,
 } from "@/lib/catalog";
-import { getSessionUser } from "@/lib/auth";
+import { getDeviceUserId } from "@/lib/auth";
 import { fetchOwnershipSafe, fetchYearsSafe } from "@/lib/collection";
 import CoinGrid from "@/components/CoinGrid";
 import CountryFlag from "@/components/CountryFlag";
@@ -51,22 +51,17 @@ export default async function PaesePage({
   let details: OwnershipMap = {};
   let coinYears: CoinYearsMap = {};
   let ownedHere = 0;
-  let isGuest = true;
-  try {
-    const user = await getSessionUser();
-    if (user) {
-      isGuest = false;
-      // Versioni Safe: MAI throw (un throw qui = pagina #441 in produzione).
-      const fetched = await fetchOwnershipSafe(user.id);
-      collection = fetched.quantities;
-      details = fetched.details;
-      coinYears = await fetchYearsSafe(user.id);
-      for (const id of Object.keys(collection)) {
-        if (id.startsWith(`${country}-`)) ownedHere += 1;
-      }
+  // Niente login: la collezione è del dispositivo (il primo + crea l'account).
+  const deviceId = await getDeviceUserId();
+  if (deviceId) {
+    // Versioni Safe: MAI throw (un throw qui = pagina #441 in produzione).
+    const fetched = await fetchOwnershipSafe(deviceId);
+    collection = fetched.quantities;
+    details = fetched.details;
+    coinYears = await fetchYearsSafe(deviceId);
+    for (const id of Object.keys(collection)) {
+      if (id.startsWith(`${country}-`)) ownedHere += 1;
     }
-  } catch {
-    // Sessione illeggibile: pagina comunque consultabile da guest
   }
 
   const pct = coins.length
@@ -88,14 +83,14 @@ export default async function PaesePage({
           <h1 className="text-3xl font-extrabold">{name}</h1>
           <p className="mt-1 text-sm text-zinc-500">
             {coins.length} monete · {comm} commemorativi ·{" "}
-            {isGuest
-              ? "accedi per tracciare il possesso"
-              : `ne possiedi ${ownedHere} (${pct}%)`}
+            {deviceId
+              ? `ne possiedi ${ownedHere} (${pct}%)`
+              : "premi + sulle monete che possiedi"}
           </p>
         </div>
       </header>
 
-      {!isGuest && coins.length > 0 && (
+      {deviceId && coins.length > 0 && (
         <div
           className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
           role="progressbar"
@@ -110,28 +105,12 @@ export default async function PaesePage({
         </div>
       )}
 
-      {isGuest && (
-        <p
-          id="login-hint"
-          className="rounded-2xl border border-dashed border-zinc-300 p-3 text-xs text-zinc-500 dark:border-zinc-700"
-        >
-          Stai sfogliando come ospite: i pulsanti + / − sono attivi dopo il{" "}
-          <Link
-            href="/login"
-            className="font-semibold text-emerald-700 hover:underline dark:text-emerald-400"
-          >
-            login
-          </Link>
-          .
-        </p>
-      )}
-
       <CoinGrid
         coins={coins}
         initialCollection={collection}
         initialDetails={details}
         initialYears={coinYears}
-        isGuest={isGuest}
+        isGuest={false}
       />
 
       <p className="text-center text-xs text-zinc-400">

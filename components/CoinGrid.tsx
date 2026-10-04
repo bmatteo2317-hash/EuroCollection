@@ -203,13 +203,12 @@ export default function CoinGrid({
   };
 
   const handleGuest = (): void => {
-    // Reindirizzamento al blocco di login: ancora #login-hint se presente,
-    // altrimenti navigazione a /login.
+    // Percorso residuale (isGuest è sempre false): rimanda al profilo.
     const hint = document.getElementById("login-hint");
     if (hint) {
       hint.scrollIntoView({ behavior: "smooth", block: "center" });
     } else {
-      router.push("/login");
+      router.push("/profilo");
     }
   };
 

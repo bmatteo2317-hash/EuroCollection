@@ -2,18 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { sql, runWriteAction, toActionError, toFriendlyDbError } from "@/lib/db";
-import { requireSessionUser } from "@/lib/auth";
-import { fetchOwnership, fetchYears } from "@/lib/collection";
+import { ensureDeviceUserId } from "@/lib/auth";
 import { isValidCountry } from "@/lib/catalog";
 import {
   COLLECTION_LIMITS,
   isGrade,
   type ActionResult,
-  type CoinYearsMap,
-  type CollectionMap,
   type Grade,
   type Ownership,
-  type OwnershipMap,
   type QuantityUpdateResult,
 } from "@/lib/types";
 
@@ -33,8 +29,7 @@ function clampQuantity(qty: number): number {
 }
 
 async function requireUserId(): Promise<string> {
-  const user = await requireSessionUser();
-  return user.id;
+  return ensureDeviceUserId();
 }
 
 function revalidateCollectionPaths(coinId?: string): void {
@@ -85,49 +80,6 @@ async function applyQuantity(
   return { coinId, quantity: clean };
 }
 
-/** Collezione dell'utente loggato: { [coin_id]: quantity }. */
-export async function getMyCollection(): Promise<
-  ActionResult<{ collection: CollectionMap }>
-> {
-  try {
-    const userId = await requireUserId();
-    const rows = (await sql()`
-      SELECT coin_id, quantity FROM public.user_collection WHERE user_id = ${userId}
-    `) as unknown as { coin_id: string; quantity: number }[];
-    const map: CollectionMap = {};
-    for (const row of rows ?? []) {
-      if (row.quantity > 0) map[row.coin_id] = row.quantity;
-    }
-    return { ok: true, collection: map };
-  } catch (e) {
-    return { ok: false, error: toActionError(e) };
-  }
-}
-
-/**
- * Quantità esatta di una moneta.
- * qty <= 0 → DELETE (torna B/N in UI). qty > 0 → UPSERT su (user_id, coin_id).
- */
-export async function setCoinQuantity(
-  coinId: string,
-  qty: number
-): Promise<QuantityResult> {
-  return runWriteAction(() => setCoinQuantityInner(coinId, qty));
-}
-
-async function setCoinQuantityInner(
-  coinId: string,
-  qty: number
-): Promise<QuantityResult> {
-  try {
-    const userId = await requireUserId();
-    const res = await applyQuantity(userId, coinId, qty);
-    return { ok: true, ...res };
-  } catch (e) {
-    return { ok: false, error: toActionError(e) };
-  }
-}
-
 /** Incrementa di 1 la quantità posseduta (lettura + upsert). */
 export async function incrementCoin(
   coinId: string
@@ -171,30 +123,6 @@ async function decrementCoinInner(
     const current = rows[0]?.quantity ?? 0;
     const res = await applyQuantity(userId, coinId, current - 1);
     return { ok: true, ...res };
-  } catch (e) {
-    return { ok: false, error: toActionError(e) };
-  }
-}
-
-/** Dettagli completi (quantità + grado + note) dell'utente loggato. */
-export async function getMyOwnership(): Promise<
-  ActionResult<{ ownership: OwnershipMap }>
-> {
-  try {
-    const userId = await requireUserId();
-    const ownership = (await fetchOwnership(userId)).details;
-    return { ok: true, ownership };
-  } catch (e) {
-    return { ok: false, error: toActionError(e) };
-  }
-}
-
-/** Anni posseduti per disegno (`coin_id -> { year: qty }`). */
-export async function getMyYears(): Promise<ActionResult<{ years: CoinYearsMap }>> {
-  try {
-    const userId = await requireUserId();
-    const years = await fetchYears(userId);
-    return { ok: true, years };
   } catch (e) {
     return { ok: false, error: toActionError(e) };
   }
@@ -495,58 +423,6 @@ async function updateCoinDetailsInner(
         notes: data.notes ?? null,
       },
     };
-  } catch (e) {
-    return { ok: false, error: toActionError(e) };
-  }
-}
-
-/** Dettagli di un anno specifico (grado + note del singolo anno). */
-export async function getCoinYearDetails(
-  coinId: string,
-  year: number
-): Promise<
-  ActionResult<{ grade: Grade | null; notes: string | null; quantity: number }>
-> {
-  try {
-    const y = cleanYear(year);
-    const userId = await requireUserId();
-    const rows = (await sql()`
-      SELECT quantity, grade, notes FROM public.user_collection_years
-      WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
-    `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
-    const row = rows[0];
-    if (!row) return { ok: true, grade: null, notes: null, quantity: 0 };
-    return {
-      ok: true,
-      grade: isGrade(row.grade) ? row.grade : null,
-      notes: row.notes ?? null,
-      quantity: row.quantity,
-    };
-  } catch (e) {
-    return { ok: false, error: toActionError(e) };
-  }
-}
-
-/** Aggiorna grado + note di un singolo anno posseduto. */
-export async function updateCoinYearDetails(
-  coinId: string,
-  year: number,
-  input: CoinDetailsInput
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const y = cleanYear(year);
-    const userId = await requireUserId();
-    const grade = input.grade !== undefined ? cleanGrade(input.grade) : undefined;
-    const notes = input.notes !== undefined ? cleanNotes(input.notes) : undefined;
-    if (grade !== undefined && notes !== undefined) {
-      await sql()`UPDATE public.user_collection_years SET grade = ${grade}, notes = ${notes}, updated_at = now() WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
-    } else if (grade !== undefined) {
-      await sql()`UPDATE public.user_collection_years SET grade = ${grade}, updated_at = now() WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
-    } else if (notes !== undefined) {
-      await sql()`UPDATE public.user_collection_years SET notes = ${notes}, updated_at = now() WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
-    }
-    revalidateCollectionPaths(coinId);
-    return { ok: true };
   } catch (e) {
     return { ok: false, error: toActionError(e) };
   }

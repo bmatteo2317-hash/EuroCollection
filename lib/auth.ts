@@ -1,54 +1,40 @@
-import bcrypt from "bcryptjs";
-import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { sql, toFriendlyDbError } from "@/lib/db";
 
-export interface SessionUser {
-  id: string;
-  email: string | null;
+/**
+ * Identità SOLO dispositivo (modello HOME-GYM): niente email, niente
+ * password, niente AUTH_SECRET. Il browser ha un cookie `euro_device`
+ * con un UUID; la prima scrittura crea da sola la riga in
+ * public.users (+ profilo via trigger). Il nome visualizzato si cambia
+ * in /profilo. Ogni dispositivo ha il suo account; per usare lo stesso
+ * su due dispositivi basta importare l'ID in /profilo.
+ */
+
+const COOKIE_NAME = "euro_device";
+// 400 giorni (max pratico per i cookie persistenti).
+const MAX_AGE_SECONDS = 60 * 60 * 24 * 400;
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isValidDeviceId(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
 }
 
-const COOKIE_NAME = "euro_session";
-const MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 giorni
-
-export const AUTH_SECRET_MESSAGE =
-  "AUTH_SECRET mancante o troppo corto (min 32 caratteri) su Vercel: aggiungilo in Project → Settings → Environment Variables (Production) e fai Redeploy. Genera con `openssl rand -base64 32`.";
-
-function secretKey(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error(AUTH_SECRET_MESSAGE);
+/** Legge l'ID dispositivo dal cookie. MAI throw (null = dispositivo nuovo). */
+export async function getDeviceUserId(): Promise<string | null> {
+  try {
+    const store = await cookies();
+    const raw = store.get(COOKIE_NAME)?.value;
+    return isValidDeviceId(raw) ? raw : null;
+  } catch {
+    return null;
   }
-  return new TextEncoder().encode(secret);
 }
 
-/** true se AUTH_SECRET è configurato (senza esporne il valore). */
-export function isAuthSecretConfigured(): boolean {
-  const secret = process.env.AUTH_SECRET;
-  return typeof secret === "string" && secret.length >= 32;
-}
-
-function cleanEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
-
-export function validateCredentials(email: string, password: string): string | null {
-  const e = email.trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return "Inserisci un indirizzo email valido.";
-  if (password.length < 6) return "La password deve avere almeno 6 caratteri.";
-  if (password.length > 200) return "La password è troppo lunga.";
-  return null;
-}
-
-/** Crea il JWT di sessione e lo scrive nel cookie httpOnly. */
-export async function createSession(user: SessionUser): Promise<void> {
-  const token = await new SignJWT({ sub: user.id, email: user.email ?? undefined })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(`${MAX_AGE_SECONDS}s`)
-    .sign(secretKey());
+async function writeDeviceCookie(id: string): Promise<void> {
   const store = await cookies();
-  store.set(COOKIE_NAME, token, {
+  store.set(COOKIE_NAME, id, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -57,110 +43,47 @@ export async function createSession(user: SessionUser): Promise<void> {
   });
 }
 
-export async function destroySession(): Promise<void> {
-  const store = await cookies();
-  store.delete(COOKIE_NAME);
-}
-
-/** Legge e verifica il cookie di sessione. Ritorna null se assente/scaduto. MAI throw. */
-export async function getSessionUser(): Promise<SessionUser | null> {
-  try {
-    let token: string | undefined;
-    try {
-      const store = await cookies();
-      token = store.get(COOKIE_NAME)?.value;
-    } catch {
-      return null;
-    }
-    if (!token) return null;
-    try {
-      const { payload } = await jwtVerify(token, secretKey());
-      const id = typeof payload.sub === "string" ? payload.sub : null;
-      if (!id) return null;
-      const email = typeof payload.email === "string" ? payload.email : null;
-      return { id, email };
-    } catch {
-      return null;
-    }
-  } catch {
-    // Qualsiasi imprevisto (es. AUTH_SECRET mancante) = guest, mai #441.
-    return null;
-  }
-}
-
-export async function requireSessionUser(): Promise<SessionUser> {
-  const user = await getSessionUser();
-  if (!user) throw new Error("UNAUTHENTICATED");
-  return user;
-}
-
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 12);
-}
-
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash);
-}
-
-interface UserRow {
-  id: string;
-  email: string | null;
-  password_hash: string | null;
-}
-
-async function findUserByEmail(email: string): Promise<UserRow | null> {
-  try {
-    const res = (await sql()`SELECT id, email, password_hash FROM public.users WHERE lower(email) = lower(${email}) LIMIT 1`) as unknown as UserRow[];
-    return res[0] ?? null;
-  } catch (e) {
-    throw toFriendlyDbError(e, "Login non riuscito: database non disponibile, riprova tra poco.");
-  }
+/** Crea la riga utente se manca (idempotente) e imposta il cookie. */
+async function provisionDeviceUser(id: string): Promise<void> {
+  await sql()`INSERT INTO public.users (id) VALUES (${id}) ON CONFLICT (id) DO NOTHING`;
+  await writeDeviceCookie(id);
 }
 
 /**
- * Registra un nuovo utente (email + password) e apre subito la sessione.
- * Profili pubblici creati dal trigger DB on_user_created.
+ * ID dispositivo garantito: se il cookie manca o è invalido, crea un
+ * nuovo account e lo imposta. Usato dalle pagine personali e da tutte
+ * le action di scrittura. Lancia solo se il DB è davvero giù (mai-throw
+ * gestito dai chiamanti con toActionError / fallback vuoto).
  */
-export async function signUpWithPassword(email: string, password: string): Promise<SessionUser> {
-  const err = validateCredentials(email, password);
-  if (err) throw new Error(err);
-  const clean = cleanEmail(email);
-  const existing = await findUserByEmail(clean);
-  if (existing) throw new Error("Questo indirizzo è già registrato: accedi invece di registrarti.");
-  const passwordHash = await hashPassword(password);
-  try {
-    const res = (await sql()`INSERT INTO public.users (email, password_hash) VALUES (${clean}, ${passwordHash}) RETURNING id, email`) as unknown as { id: string; email: string | null }[];
-    const row = res[0];
-    if (!row) throw new Error("Registrazione fallita: riprova tra poco.");
-    const user: SessionUser = { id: row.id, email: row.email };
-    await createSession(user);
-    return user;
-  } catch (e) {
-    // Messaggi curati sopra (es. "già registrato") passano invariati.
-    if (e instanceof Error && /già registrato|email|password/i.test(e.message)) throw e;
-    // AUTH_SECRET: messaggio esplicito, altrimenti in produzione
-    // diventerebbe "Minified React error #441" senza spiegazione.
-    if (e instanceof Error && e.message === AUTH_SECRET_MESSAGE) throw e;
-    throw toFriendlyDbError(e, "Registrazione fallita: database non disponibile, riprova tra poco.");
+export async function ensureDeviceUserId(): Promise<string> {
+  const existing = await getDeviceUserId();
+  if (existing) {
+    try {
+      await sql()`INSERT INTO public.users (id) VALUES (${existing}) ON CONFLICT (id) DO NOTHING`;
+    } catch (e) {
+      throw toFriendlyDbError(e, "Database non disponibile, riprova tra poco.");
+    }
+    return existing;
   }
+  const fresh = crypto.randomUUID();
+  try {
+    await provisionDeviceUser(fresh);
+  } catch (e) {
+    throw toFriendlyDbError(e, "Database non disponibile, riprova tra poco.");
+  }
+  return fresh;
 }
 
-/** Login con email + password esistenti, apre la sessione. */
-export async function signInWithPassword(email: string, password: string): Promise<SessionUser> {
-  const err = validateCredentials(email, password);
-  if (err) throw new Error(err);
-  const clean = cleanEmail(email);
-  const found = await findUserByEmail(clean);
-  if (!found || !found.password_hash) throw new Error("Credenziali non valide: controlla email e password.");
-  const ok = await verifyPassword(password, found.password_hash);
-  if (!ok) throw new Error("Credenziali non valide: controlla email e password.");
-  const user: SessionUser = { id: found.id, email: found.email };
+/**
+ * Collega questo browser a un account esistente (ID copiato da un altro
+ * dispositivo). Ritorna false se l'ID non è un UUID valido.
+ */
+export async function adoptDeviceId(id: string): Promise<boolean> {
+  if (!isValidDeviceId(id)) return false;
   try {
-    await createSession(user);
-  } catch (e) {
-    // AUTH_SECRET mancante su Vercel: errore esplicito invece di #441.
-    if (e instanceof Error && e.message === AUTH_SECRET_MESSAGE) throw e;
-    throw toFriendlyDbError(e, "Login non riuscito: riprova tra poco.");
+    await provisionDeviceUser(id);
+    return true;
+  } catch {
+    return false;
   }
-  return user;
 }

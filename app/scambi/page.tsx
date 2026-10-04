@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCatalog } from "@/lib/catalog";
-import { getSessionUser } from "@/lib/auth";
+import { ensureDeviceUserId } from "@/lib/auth";
 import { sql, isMissingTableError } from "@/lib/db";
 import { fetchOwnership } from "@/lib/collection";
 import {
@@ -26,17 +25,19 @@ const MISSING_TABLES_MESSAGE =
   "Manca lo schema sociale su Neon: esegui neon/schema.sql nel SQL Editor di Neon.";
 
 export default async function ScambiPage() {
-  let userId: string | null = null;
-  let userEmail: string | null = null;
-  try {
-    const user = await getSessionUser();
-    userId = user?.id ?? null;
-    userEmail = user?.email ?? null;
-  } catch {
-    userId = null;
+  // Niente login: la pagina crea da sola l'account del dispositivo.
+  const meId = await ensureDeviceUserId().catch(() => null);
+  if (!meId) {
+    return (
+      <div className="mx-auto max-w-lg py-16 text-center">
+        <h1 className="text-2xl font-extrabold">Scambi non disponibili</h1>
+        <p className="mt-2 text-sm text-zinc-500">
+          Database non raggiungibile. Controlla il collegamento Neon
+          (apri /api/health per la diagnosi) e ricarica.
+        </p>
+      </div>
+    );
   }
-  if (!userId) redirect("/login");
-  const meId = userId as string;
 
   let users: SocialUser[] = [];
   let friendships: Friendship[] = [];
@@ -50,7 +51,7 @@ export default async function ScambiPage() {
 
   try {
     try {
-      await ensureProfile(meId, userEmail);
+      await ensureProfile(meId);
     } catch (e) {
       console.warn("[scambi] ensureProfile fallito:", e);
     }

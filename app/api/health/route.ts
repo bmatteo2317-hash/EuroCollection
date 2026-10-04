@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import { DB_ENV_KEYS, isDbConfigured, sql } from "@/lib/db";
-import { isAuthSecretConfigured } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Diagnostica del collegamento Neon + AUTH_SECRET su Vercel.
- * GET /api/health → { ok, stage, present, authSecret, ... }
+ * Diagnostica del collegamento Neon su Vercel.
+ * GET /api/health → { ok, stage, present, ... }
  * Non espone valori dei secret, solo se sono presenti/validi.
  */
 export async function GET() {
@@ -15,7 +14,6 @@ export async function GET() {
     const v = process.env[k];
     return typeof v === "string" && v.trim().length > 0;
   });
-  const authSecret = isAuthSecretConfigured() ? "ok" : "missing";
 
   if (!isDbConfigured()) {
     return NextResponse.json(
@@ -26,7 +24,6 @@ export async function GET() {
           "Nessuna connection string trovata. Su Vercel: Project → Storage (Neon) → verifica Environment Variables per Production → Redeploy. In locale: .env.local con DATABASE_URL.",
         present,
         expected: DB_ENV_KEYS,
-        authSecret,
       },
       { status: 500 }
     );
@@ -75,22 +72,6 @@ export async function GET() {
           stage: "schema",
           message: `Manca lo schema su Neon (tabelle mancanti: ${missing.join(", ")}). Esegui neon/schema.sql nel SQL Editor di Neon.`,
           missing,
-          authSecret,
-          latencyMs: Date.now() - started,
-        },
-        { status: 500 }
-      );
-    }
-
-    if (authSecret !== "ok") {
-      return NextResponse.json(
-        {
-          ok: false,
-          stage: "auth",
-          message:
-            "AUTH_SECRET mancante o troppo corto (min 32 caratteri) su Vercel: aggiungilo in Project → Settings → Environment Variables (Production) e fai Redeploy. Senza, login/registrazione falliscono.",
-          present,
-          authSecret,
           latencyMs: Date.now() - started,
         },
         { status: 500 }
@@ -107,7 +88,6 @@ export async function GET() {
           mirrorError,
           mirrorMs,
           present,
-          authSecret,
           latencyMs: Date.now() - started,
         },
         { status: 500 }
@@ -117,9 +97,8 @@ export async function GET() {
     return NextResponse.json({
       ok: true,
       stage: "ok",
-      message: "Neon raggiungibile, schema presente, AUTH_SECRET ok.",
+      message: "Neon raggiungibile e schema presente.",
       present,
-      authSecret,
       mirrorMs,
       latencyMs: Date.now() - started,
     });
@@ -134,7 +113,6 @@ export async function GET() {
             ? e.message
             : "Neon non raggiungibile: progetto in pausa o connection string errata.",
         present,
-        authSecret,
         latencyMs: Date.now() - started,
       },
       { status: 500 }

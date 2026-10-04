@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { sql, toActionError } from "@/lib/db";
-import { requireSessionUser } from "@/lib/auth";
+import { ensureDeviceUserId } from "@/lib/auth";
 import { toFriendship, type FriendshipStatus } from "@/lib/social";
 import {
   COLLECTION_LIMITS,
@@ -18,8 +18,7 @@ import {
  */
 
 async function requireUserId(): Promise<string> {
-  const user = await requireSessionUser();
-  return user.id;
+  return ensureDeviceUserId();
 }
 
 function touchScambi(): void {

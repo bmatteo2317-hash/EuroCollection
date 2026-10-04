@@ -1,10 +1,9 @@
-import { redirect } from "next/navigation";
 import {
   getCatalog,
   getCountriesWithCounts,
   getTotalCount,
 } from "@/lib/catalog";
-import { getSessionUser } from "@/lib/auth";
+import { ensureDeviceUserId } from "@/lib/auth";
 import { fetchOwnershipSafe, fetchYearsSafe } from "@/lib/collection";
 import type {
   CoinYearsMap,
@@ -16,22 +15,13 @@ import CompletionDonut from "@/components/CompletionDonut";
 import CountryFlag from "@/components/CountryFlag";
 import CoinGrid from "@/components/CoinGrid";
 
-// Pagina privata: mai prerenderizzata in build (usa cookies() + redirect).
+// Pagina personale: mai prerenderizzata in build (usa cookies()).
 export const dynamic = "force-dynamic";
 
 export default async function CollezionePage() {
-  // Mai far crashare la rotta se il DB manca: senza utente → /login.
-  // (redirect() lancia un'eccezione interna: va chiamato FUORI dal try.)
-  let userId: string | null = null;
-  let userEmail: string | null = null;
-  try {
-    const user = await getSessionUser();
-    userId = user?.id ?? null;
-    userEmail = user?.email ?? null;
-  } catch {
-    userId = null;
-  }
-  if (!userId) redirect("/login");
+  // Niente login: la pagina crea da sola l'account del dispositivo.
+  // Se il DB è giù, ensure lancia → pagina gestita dal boundary (error.tsx).
+  const userId = await ensureDeviceUserId().catch(() => null);
 
   // Mai far crashare la pagina per un errore di lettura collezione:
   // un throw qui, durante la revalidazione scatenata da una Server Action
@@ -40,7 +30,7 @@ export default async function CollezionePage() {
   let collection: CollectionMap = {};
   let details: OwnershipMap = {};
   let coinYears: CoinYearsMap = {};
-  {
+  if (userId) {
     const fetched = await fetchOwnershipSafe(userId);
     collection = fetched.quantities;
     details = fetched.details;
@@ -76,8 +66,7 @@ export default async function CollezionePage() {
       <header>
         <h1 className="text-3xl font-extrabold">La mia collezione</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          {userEmail} · {pieces} pezzi totali · {owned} tipi distinti ·{" "}
-          {duplicates} doppioni
+          {pieces} pezzi totali · {owned} tipi distinti · {duplicates} doppioni
         </p>
       </header>
 

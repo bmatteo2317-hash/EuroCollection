@@ -157,17 +157,19 @@ export function toActionError(e: unknown): string {
   }
   if (isMissingEnvError(e)) return MISSING_ENV_MESSAGE;
   if (isMissingTableError(e)) return MISSING_TABLES_MESSAGE;
-  if (isConnectionError(e)) {
-    // Già convertito dall'helper interno: non duplicare il testo.
-    if (raw.startsWith(NEON_UNREACHABLE_MESSAGE)) return raw;
-    return `${NEON_UNREACHABLE_MESSAGE}${techDetail(raw)}`;
-  }
+  // Prima i messaggi già convertiti (contengono "neon" e ingannerebbero
+  // il controllo di connessione qui sotto): mai riclassificarli.
   if (
     raw === MISSING_TABLES_MESSAGE ||
     raw === MISSING_ENV_MESSAGE ||
-    raw === NEON_UNREACHABLE_MESSAGE
+    raw.startsWith(MISSING_TABLES_MESSAGE) ||
+    raw.startsWith(MISSING_ENV_MESSAGE) ||
+    raw.startsWith(NEON_UNREACHABLE_MESSAGE)
   ) {
     return raw;
+  }
+  if (isConnectionError(e)) {
+    return `${NEON_UNREACHABLE_MESSAGE}${techDetail(raw)}`;
   }
   // Codici curati (il client li mappa con contesto): invariati.
   if (/^[A-Z_]+$/.test(raw)) return digest ? `${raw} (codice: ${digest})` : raw;
