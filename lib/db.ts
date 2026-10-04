@@ -103,14 +103,19 @@ export function isConnectionError(error: unknown): boolean {
 export const NEON_UNREACHABLE_MESSAGE =
   "Neon non raggiungibile: controlla che il progetto Neon sia attivo (non in pausa) e che la connection string su Vercel sia quella pooled con ?sslmode=require, poi fai Redeploy.";
 
+/** Dettaglio tecnico grezzo (troncato) da mostrare per la diagnosi. */
+function techDetail(raw: string): string {
+  const t = raw.replace(/\s+/g, " ").trim().slice(0, 220);
+  return t && !/Minified React error|#441/i.test(t) ? ` Dettaglio tecnico: ${t}` : "";
+}
+
 /**
- * Esegue un'action mai-throw con UN retry automatico sui soli errori di
- * connessione. Perché: Neon in idle mette in pausa il compute e la PRIMA
- * query al risveglio spesso fallisce (fetch failed/timeout) mentre la
- * seconda — a compute sveglio — riesce. Senza retry, quel fallimento
- * transitorio diventa un errore visibile all'utente.
- * Il retry scatta SOLO su NEON_UNREACHABLE_MESSAGE (nessun effetto su
- * errori logici come NOT_OWNED o UNAUTHENTICATED, che non vengono ripetuti).
+ * Esegue un'action mai-throw con retry automatici sui soli errori di
+ * connessione. Perché: Neon in idle mette in pausa il compute e le prime
+ * query al risveglio spesso falliscono (fetch failed/timeout) mentre le
+ * successive — a compute sveglio — riescono.
+ * Il retry scatta SOLO su errori di connessione (non su errori logici
+ * come NOT_OWNED o UNAUTHENTICATED, che non vengono ripetuti).
  */
 export async function runWriteAction<T extends object>(
   fn: () => Promise<
@@ -118,10 +123,15 @@ export async function runWriteAction<T extends object>(
   >
 ): Promise<({ ok: true } & T) | { ok: false; error: string }> {
   const first = await fn();
-  if (first.ok || first.error !== NEON_UNREACHABLE_MESSAGE) return first;
-  console.warn("[db] errore connessione al primo tentativo, riprovo tra 1.5s…");
-  await new Promise((r) => setTimeout(r, 1500));
-  return fn();
+  if (first.ok || !first.error.startsWith(NEON_UNREACHABLE_MESSAGE)) return first;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    console.warn(`[db] errore connessione, retry ${attempt}/2 tra 2.5s…`);
+    await new Promise((r) => setTimeout(r, 2500));
+    const res = await fn();
+    if (res.ok || !res.error.startsWith(NEON_UNREACHABLE_MESSAGE)) return res;
+    if (attempt === 2) return res;
+  }
+  return first;
 }
 
 /**
@@ -147,7 +157,11 @@ export function toActionError(e: unknown): string {
   }
   if (isMissingEnvError(e)) return MISSING_ENV_MESSAGE;
   if (isMissingTableError(e)) return MISSING_TABLES_MESSAGE;
-  if (isConnectionError(e)) return NEON_UNREACHABLE_MESSAGE;
+  if (isConnectionError(e)) {
+    // Già convertito dall'helper interno: non duplicare il testo.
+    if (raw.startsWith(NEON_UNREACHABLE_MESSAGE)) return raw;
+    return `${NEON_UNREACHABLE_MESSAGE}${techDetail(raw)}`;
+  }
   if (
     raw === MISSING_TABLES_MESSAGE ||
     raw === MISSING_ENV_MESSAGE ||
@@ -162,7 +176,7 @@ export function toActionError(e: unknown): string {
   } else {
     console.error("[db] errore action non-Error:", e);
   }
-  return "Operazione non riuscita: database non disponibile, riprova tra poco.";
+  return `Operazione non riuscita: database non disponibile, riprova tra poco.${techDetail(raw)}`;
 }
 
 /**
@@ -174,7 +188,10 @@ export function toActionError(e: unknown): string {
 export function toFriendlyDbError(error: unknown, fallback: string): Error {
   if (isMissingEnvError(error)) return new Error(MISSING_ENV_MESSAGE);
   if (isMissingTableError(error)) return new Error(MISSING_TABLES_MESSAGE);
-  if (isConnectionError(error)) return new Error(NEON_UNREACHABLE_MESSAGE);
+  if (isConnectionError(error)) {
+    const raw = error instanceof Error ? error.message : "";
+    return new Error(`${NEON_UNREACHABLE_MESSAGE}${techDetail(raw)}`);
+  }
   if (error instanceof Error && error.message) {
     // Messaggi già curati dal nostro codice (VALIDATION, NOT_OWNED…).
     if (
@@ -184,10 +201,10 @@ export function toFriendlyDbError(error: unknown, fallback: string): Error {
     ) {
       return error;
     }
-    // Evita di leakare dettagli driver in produzione: mostra un fallback
-    // breve e logga l'originale nei server log (Vercel Function Logs).
+    // Fallback + dettaglio tecnico grezzo (troncato): serve per diagnosticare
+    // senza accesso ai Function Logs (l'originale resta anche nei log).
     console.error("[db] errore Neon:", error);
-    return new Error(fallback);
+    return new Error(`${fallback}${techDetail(error.message)}`);
   }
   console.error("[db] errore Neon non-Error:", error);
   return new Error(fallback);

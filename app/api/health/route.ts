@@ -36,6 +36,22 @@ export async function GET() {
     const ping = (await sql()`SELECT 1 AS one`) as unknown as { one: number }[];
     if (!ping?.[0]) throw new Error("Ping vuoto");
 
+    // Query-specchio dell'action + (stessa tabella, stesso WHERE):
+    // se questa fallisce mentre il ping riesce, il problema è qui.
+    let mirrorOk = false;
+    let mirrorError: string | null = null;
+    const mirrorStart = Date.now();
+    try {
+      await sql()`SELECT quantity FROM public.user_collection LIMIT 1`;
+      mirrorOk = true;
+    } catch (e) {
+      mirrorError =
+        e instanceof Error && e.message
+          ? e.message.replace(/\s+/g, " ").trim().slice(0, 300)
+          : "errore sconosciuto";
+    }
+    const mirrorMs = Date.now() - mirrorStart;
+
     // Tabelle richieste dallo schema (neon/schema.sql).
     const tables = (await sql()`
       SELECT tablename FROM pg_tables WHERE schemaname = 'public'
@@ -81,12 +97,30 @@ export async function GET() {
       );
     }
 
+    if (!mirrorOk) {
+      return NextResponse.json(
+        {
+          ok: false,
+          stage: "mirror",
+          message:
+            "Il ping riesce ma la SELECT su user_collection fallisce: il problema è su quella query, non sulla connessione generica.",
+          mirrorError,
+          mirrorMs,
+          present,
+          authSecret,
+          latencyMs: Date.now() - started,
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       ok: true,
       stage: "ok",
       message: "Neon raggiungibile, schema presente, AUTH_SECRET ok.",
       present,
       authSecret,
+      mirrorMs,
       latencyMs: Date.now() - started,
     });
   } catch (e) {
