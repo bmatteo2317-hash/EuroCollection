@@ -18,7 +18,13 @@ export default function AuthForm({
   const [err, setErr] = useState<string | null>(initialError);
 
   function toDetail(e: unknown): string {
-    return e instanceof Error ? e.message : "Operazione non riuscita.";
+    const raw =
+      e instanceof Error && e.message ? e.message : "Operazione non riuscita.";
+    // Rete/trasporto: se arriva il testo minificato, traducilo.
+    if (/Minified React error|#441/i.test(raw)) {
+      return "Il server non ha risposto correttamente: apri /api/health per la diagnosi del database e riprova.";
+    }
+    return raw;
   }
 
   /** A successo naviga alla home (il cookie di sessione è già stato scritto). */
@@ -33,7 +39,12 @@ export default function AuthForm({
     setErr(null);
     setMsg(null);
     try {
-      await signInAction(email, password);
+      // L'action non lancia mai: ritorna { ok, error } leggibile.
+      const res = await signInAction(email, password);
+      if (!res.ok) {
+        setErr(res.error);
+        return;
+      }
       goHome();
     } catch (e: unknown) {
       setErr(toDetail(e));
@@ -48,7 +59,12 @@ export default function AuthForm({
     setErr(null);
     setMsg(null);
     try {
-      await signUpAction(email, password);
+      const res = await signUpAction(email, password);
+      if (!res.ok) {
+        setMsg(null);
+        setErr(res.error);
+        return;
+      }
       setMsg("Account creato! Accesso in corso…");
       goHome();
     } catch (e: unknown) {
