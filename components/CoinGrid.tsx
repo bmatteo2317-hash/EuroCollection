@@ -77,28 +77,25 @@ function clampQty(qty: number): number {
 }
 
 /**
- * Dettaglio leggibile di un errore da Server Action.
- * In produzione gli errori delle Server Action arrivano come
- * "Minified React error #441" (messaggio oscurato + `digest` opaco):
- * in quel caso mostriamo un testo d'uso e rimandiamo ai log Vercel,
- * perché il digest non è decodificabile dal browser.
+ * Traduce il codice di errore di una action mai-throw in testo con contesto.
+ * Le action non lanciano più: `error` è sempre leggibile (mai #441).
  */
-function toErrorDetail(e: unknown): string {
-  if (e instanceof Error) {
-    console.error("[CoinGrid] server action fallita:", e);
-    const digest =
-      typeof (e as { digest?: unknown }).digest === "string"
-        ? (e as { digest?: string }).digest
-        : null;
-    const raw = e.message ?? "";
-    if (/Minified React error|#441/i.test(raw)) {
-      return digest
-        ? `Il server non ha completato l'operazione (codice ${digest}: vedi Function Logs su Vercel → /api/health per la diagnosi Neon).`
-        : "Il server non ha completato l'operazione: controlla la connessione Neon (/api/health) e riprova.";
-    }
-    return digest ? `${raw} (digest: ${digest})` : raw;
+function mapActionError(code: string, fallbackPrefix: string): string {
+  if (code === "UNAUTHENTICATED")
+    return "Sessione scaduta: accedi di nuovo per salvare la collezione.";
+  if (code === "NOT_OWNED")
+    return "Premi prima + per possedere la moneta, poi aggiungi grado e note.";
+  return `${fallbackPrefix}. Dettaglio: ${code}`;
+}
+
+/** Ultima rete: se la chiamata action stessa non arriva al server (rete). */
+function toTransportDetail(e: unknown): string {
+  console.error("[CoinGrid] chiamata action fallita:", e);
+  const raw = e instanceof Error && e.message ? e.message : "Errore di rete";
+  if (/Minified React error|#441/i.test(raw)) {
+    return "Il server non ha risposto correttamente: apri /api/health per la diagnosi e riprova.";
   }
-  return "Errore sconosciuto";
+  return raw;
 }
 
 function valueRank(coin: CatalogCoin): number {
@@ -238,14 +235,18 @@ export default function CoinGrid({
           delta > 0
             ? await incrementCoin(coin.id)
             : await decrementCoin(coin.id);
+        if (!res.ok) {
+          setQuantities((prev) => withQuantity(prev, coin.id, current));
+          setError(
+            mapActionError(res.error, `Operazione fallita su ${coin.faceValue} ${coin.year}`)
+          );
+          return;
+        }
         setQuantities((prev) => withQuantity(prev, coin.id, res.quantity));
       } catch (e) {
         setQuantities((prev) => withQuantity(prev, coin.id, current));
-        const detail = toErrorDetail(e);
         setError(
-          detail === "UNAUTHENTICATED"
-            ? "Sessione scaduta: accedi di nuovo per salvare la collezione."
-            : `Operazione fallita su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
+          `Operazione fallita su ${coin.faceValue} ${coin.year}. Dettaglio: ${toTransportDetail(e)}`
         );
       } finally {
         setBusy(coin.id, false);
@@ -273,6 +274,14 @@ export default function CoinGrid({
     startTransition(async () => {
       try {
         const res = await toggleCoinYear(coin.id, year);
+        if (!res.ok) {
+          setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
+          setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
+          setError(
+            mapActionError(res.error, `Anni ${coin.faceValue} · ${coin.countryName}`)
+          );
+          return;
+        }
         setYearsMap((prev) =>
           withYear(prev, coin.id, res.year, res.quantity)
         );
@@ -282,9 +291,8 @@ export default function CoinGrid({
       } catch (e) {
         setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
         setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
-        const detail = toErrorDetail(e);
         setError(
-          `Anni ${coin.faceValue} · ${coin.countryName}: ${detail}`
+          `Anni ${coin.faceValue} · ${coin.countryName}: ${toTransportDetail(e)}`
         );
       } finally {
         setBusy(coin.id, false);
@@ -322,6 +330,14 @@ export default function CoinGrid({
           delta > 0
             ? await incrementCoinYear(coin.id, year)
             : await decrementCoinYear(coin.id, year);
+        if (!res.ok) {
+          setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
+          setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
+          setError(
+            mapActionError(res.error, `Doppioni ${coin.faceValue} ${year} · ${coin.countryName}`)
+          );
+          return;
+        }
         setYearsMap((prev) =>
           withYear(prev, coin.id, res.year, res.quantity)
         );
@@ -331,9 +347,8 @@ export default function CoinGrid({
       } catch (e) {
         setYearsMap((prev) => withYear(prev, coin.id, year, prevYearQty));
         setQuantities((prev) => withQuantity(prev, coin.id, prevMainQty));
-        const detail = toErrorDetail(e);
         setError(
-          `Doppioni ${coin.faceValue} ${year} · ${coin.countryName}: ${detail}`
+          `Doppioni ${coin.faceValue} ${year} · ${coin.countryName}: ${toTransportDetail(e)}`
         );
       } finally {
         setBusy(coin.id, false);
@@ -357,16 +372,20 @@ export default function CoinGrid({
     startTransition(async () => {
       try {
         const res = await updateCoinDetails(coin.id, { grade, notes });
+        if (!res.ok) {
+          if (previous) setDetails((prev) => ({ ...prev, [coin.id]: previous }));
+          setError(
+            mapActionError(res.error, `Salvataggio dettagli fallito su ${coin.faceValue} ${coin.year}`)
+          );
+          return;
+        }
         if (res.ownership) {
           setDetails((prev) => ({ ...prev, [coin.id]: res.ownership as Ownership }));
         }
       } catch (e) {
-        const detail = toErrorDetail(e);
         if (previous) setDetails((prev) => ({ ...prev, [coin.id]: previous }));
         setError(
-          detail === "NOT_OWNED"
-            ? "Premi prima + per possedere la moneta, poi aggiungi grado e note."
-            : `Salvataggio dettagli fallito su ${coin.faceValue} ${coin.year}. Dettaglio: ${detail}`
+          `Salvataggio dettagli fallito su ${coin.faceValue} ${coin.year}. Dettaglio: ${toTransportDetail(e)}`
         );
       } finally {
         setBusy(coin.id, false);

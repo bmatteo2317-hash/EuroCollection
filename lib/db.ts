@@ -104,6 +104,47 @@ export const NEON_UNREACHABLE_MESSAGE =
   "Neon non raggiungibile: controlla che il progetto Neon sia attivo (non in pausa) e che la connection string su Vercel sia quella pooled con ?sslmode=require, poi fai Redeploy.";
 
 /**
+ * Converte QUALSIASI errore lanciato dentro una Server Action in un testo
+ * leggibile da mettere in `{ ok: false, error }` (mai rilanciare: in
+ * produzione il lancio diventa "Minified React error #441").
+ * I codici curati brevi (UNAUTHENTICATED, NOT_OWNED…) passano invariati
+ * perché il client li traduce con contesto; gli errori infra diventano
+ * messaggi italiani stabili; tutto il resto è un fallback generico
+ * (l'originale finisce nei Function Logs via console.error).
+ */
+export function toActionError(e: unknown): string {
+  const raw =
+    e instanceof Error && e.message ? e.message : "Operazione non riuscita.";
+  const digest =
+    e instanceof Error && typeof (e as { digest?: unknown }).digest === "string"
+      ? ((e as { digest?: string }).digest as string)
+      : null;
+  if (/Minified React error|#441/i.test(raw)) {
+    return digest
+      ? `Il server non ha completato l'operazione (codice ${digest}). Apri /api/health per la diagnosi del database e controlla i Function Logs su Vercel.`
+      : "Il server non ha completato l'operazione: apri /api/health per la diagnosi del database e riprova.";
+  }
+  if (isMissingEnvError(e)) return MISSING_ENV_MESSAGE;
+  if (isMissingTableError(e)) return MISSING_TABLES_MESSAGE;
+  if (isConnectionError(e)) return NEON_UNREACHABLE_MESSAGE;
+  if (
+    raw === MISSING_TABLES_MESSAGE ||
+    raw === MISSING_ENV_MESSAGE ||
+    raw === NEON_UNREACHABLE_MESSAGE
+  ) {
+    return raw;
+  }
+  // Codici curati (il client li mappa con contesto): invariati.
+  if (/^[A-Z_]+$/.test(raw)) return digest ? `${raw} (codice: ${digest})` : raw;
+  if (e instanceof Error) {
+    console.error("[db] errore action:", e);
+  } else {
+    console.error("[db] errore action non-Error:", e);
+  }
+  return "Operazione non riuscita: database non disponibile, riprova tra poco.";
+}
+
+/**
  * Converte QUALSIASI errore DB in un Error con messaggio stabile e
  * serializzabile. Fondamentale: in produzione gli errori grezzi delle
  * Server Action arrivano al client come "Minified React error #441"

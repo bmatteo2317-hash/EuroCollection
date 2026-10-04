@@ -1,7 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { toActionError } from "@/lib/db";
 import {
+  AUTH_SECRET_MESSAGE,
   destroySession,
   signInWithPassword,
   signUpWithPassword,
@@ -21,20 +23,9 @@ import {
 export type AuthResult = { ok: true } | { ok: false; error: string };
 
 function toResultError(e: unknown): string {
-  const raw =
-    e instanceof Error && e.message ? e.message : "Operazione non riuscita.";
-  const digest =
-    e instanceof Error && typeof (e as { digest?: unknown }).digest === "string"
-      ? ((e as { digest?: string }).digest as string)
-      : null;
-  // Se per qualsiasi motivo arriva comunque un errore minificato,
-  // non mostrarlo grezzo: rimanda alla diagnosi.
-  if (/Minified React error|#441/i.test(raw)) {
-    return digest
-      ? `Il server non ha completato l'operazione (codice ${digest}). Apri /api/health per la diagnosi del database e controlla i Function Logs su Vercel.`
-      : "Il server non ha completato l'operazione: apri /api/health per la diagnosi del database e riprova.";
-  }
-  return digest ? `${raw} (codice: ${digest})` : raw;
+  // AUTH_SECRET: messaggio esplicito con istruzioni Vercel.
+  if (e instanceof Error && e.message === AUTH_SECRET_MESSAGE) return e.message;
+  return toActionError(e);
 }
 
 export async function signUpAction(

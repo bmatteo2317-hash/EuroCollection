@@ -37,6 +37,29 @@ export interface QuantityUpdateResult {
   quantity: number;
 }
 
+/**
+ * Risultato MAI-throw delle Server Action. In produzione un `throw` oltre
+ * il boundary diventa "Minified React error #441" senza messaggio: tutte
+ * le action ritornano `{ ok: true, ...dati }` oppure `{ ok: false, error }`
+ * con testo leggibile, e il client non deve mai fare try/catch sul lancio.
+ */
+export type ActionResult<T extends object> = ({ ok: true } & T) | { ok: false; error: string };
+
+/** Type-guard: true se il risultato è un fallimento `{ ok: false, error }`. */
+export function isActionError<T extends object>(
+  res: ActionResult<T> | unknown
+): res is { ok: false; error: string } {
+  return (
+    !!res &&
+    typeof res === "object" &&
+    "ok" in res &&
+    (res as { ok: unknown }).ok === false
+  );
+}
+
+/** Risultato mai-throw per le action che non ritornano dati (solo ok/errore). */
+export type VoidResult = { ok: true } | { ok: false; error: string };
+
 /** Profilo utente minimo usato nelle pagine server. */
 export interface AuthUserInfo {
   id: string;

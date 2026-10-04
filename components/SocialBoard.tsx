@@ -93,15 +93,24 @@ export default function SocialBoard({
   const [swapMine, setSwapMine] = useState<string>("");
   const [swapMsg, setSwapMsg] = useState<string>("");
 
-  const run = (fn: () => Promise<unknown>): void => {
+  const run = (fn: () => Promise<{ ok: boolean; error?: string }>): void => {
     setError(null);
     startTransition(async () => {
       try {
-        await fn();
+        // Le action non lanciano mai: ritornano { ok, error } leggibile.
+        const res = await fn();
+        if (!res.ok) {
+          setError(friendlyError(res.error ?? "Operazione fallita."));
+          return;
+        }
         router.refresh();
       } catch (e) {
+        const raw =
+          e instanceof Error && e.message ? e.message : "Operazione fallita.";
         setError(
-          e instanceof Error ? friendlyError(e.message) : "Operazione fallita."
+          /Minified React error|#441/i.test(raw)
+            ? "Il server non ha risposto correttamente: apri /api/health per la diagnosi e riprova."
+            : friendlyError(raw)
         );
       }
     });
