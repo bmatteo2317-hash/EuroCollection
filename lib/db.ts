@@ -104,6 +104,27 @@ export const NEON_UNREACHABLE_MESSAGE =
   "Neon non raggiungibile: controlla che il progetto Neon sia attivo (non in pausa) e che la connection string su Vercel sia quella pooled con ?sslmode=require, poi fai Redeploy.";
 
 /**
+ * Esegue un'action mai-throw con UN retry automatico sui soli errori di
+ * connessione. Perché: Neon in idle mette in pausa il compute e la PRIMA
+ * query al risveglio spesso fallisce (fetch failed/timeout) mentre la
+ * seconda — a compute sveglio — riesce. Senza retry, quel fallimento
+ * transitorio diventa un errore visibile all'utente.
+ * Il retry scatta SOLO su NEON_UNREACHABLE_MESSAGE (nessun effetto su
+ * errori logici come NOT_OWNED o UNAUTHENTICATED, che non vengono ripetuti).
+ */
+export async function runWriteAction<T extends object>(
+  fn: () => Promise<
+    ({ ok: true } & T) | { ok: false; error: string }
+  >
+): Promise<({ ok: true } & T) | { ok: false; error: string }> {
+  const first = await fn();
+  if (first.ok || first.error !== NEON_UNREACHABLE_MESSAGE) return first;
+  console.warn("[db] errore connessione al primo tentativo, riprovo tra 1.5s…");
+  await new Promise((r) => setTimeout(r, 1500));
+  return fn();
+}
+
+/**
  * Converte QUALSIASI errore lanciato dentro una Server Action in un testo
  * leggibile da mettere in `{ ok: false, error }` (mai rilanciare: in
  * produzione il lancio diventa "Minified React error #441").

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { sql, toActionError, toFriendlyDbError } from "@/lib/db";
+import { sql, runWriteAction, toActionError, toFriendlyDbError } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
 import { fetchOwnership, fetchYears } from "@/lib/collection";
 import { isValidCountry } from "@/lib/catalog";
@@ -112,6 +112,13 @@ export async function setCoinQuantity(
   coinId: string,
   qty: number
 ): Promise<QuantityResult> {
+  return runWriteAction(() => setCoinQuantityInner(coinId, qty));
+}
+
+async function setCoinQuantityInner(
+  coinId: string,
+  qty: number
+): Promise<QuantityResult> {
   try {
     const userId = await requireUserId();
     const res = await applyQuantity(userId, coinId, qty);
@@ -123,6 +130,12 @@ export async function setCoinQuantity(
 
 /** Incrementa di 1 la quantità posseduta (lettura + upsert). */
 export async function incrementCoin(
+  coinId: string
+): Promise<QuantityResult> {
+  return runWriteAction(() => incrementCoinInner(coinId));
+}
+
+async function incrementCoinInner(
   coinId: string
 ): Promise<QuantityResult> {
   try {
@@ -141,6 +154,12 @@ export async function incrementCoin(
 
 /** Decrementa di 1 (a zero esegue DELETE). */
 export async function decrementCoin(
+  coinId: string
+): Promise<QuantityResult> {
+  return runWriteAction(() => decrementCoinInner(coinId));
+}
+
+async function decrementCoinInner(
   coinId: string
 ): Promise<QuantityResult> {
   try {
@@ -233,7 +252,7 @@ export type YearResult = ActionResult<ToggleYearResult>;
  * qty <= 0 → DELETE dell'anno; qty > 0 → UPSERT su (user_id, coin_id, year).
  * La riga principale viene sincronizzata = SOMMA pezzi di tutti gli anni.
  */
-async function setCoinYearQuantityInner(
+async function writeCoinYearQuantity(
   userId: string,
   coinId: string,
   year: number,
@@ -265,9 +284,17 @@ export async function setCoinYearQuantity(
   year: number,
   qty: number
 ): Promise<YearResult> {
+  return runWriteAction(() => setCoinYearQuantityInner(coinId, year, qty));
+}
+
+async function setCoinYearQuantityInner(
+  coinId: string,
+  year: number,
+  qty: number
+): Promise<YearResult> {
   try {
     const userId = await requireUserId();
-    const res = await setCoinYearQuantityInner(userId, coinId, year, qty);
+    const res = await writeCoinYearQuantity(userId, coinId, year, qty);
     return { ok: true, ...res };
   } catch (e) {
     return { ok: false, error: toActionError(e) };
@@ -279,6 +306,13 @@ export async function incrementCoinYear(
   coinId: string,
   year: number
 ): Promise<YearResult> {
+  return runWriteAction(() => incrementCoinYearInner(coinId, year));
+}
+
+async function incrementCoinYearInner(
+  coinId: string,
+  year: number
+): Promise<YearResult> {
   try {
     const y = cleanYear(year);
     const userId = await requireUserId();
@@ -286,7 +320,7 @@ export async function incrementCoinYear(
       SELECT quantity FROM public.user_collection_years
       WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
     `) as unknown as { quantity: number }[];
-    const res = await setCoinYearQuantityInner(
+    const res = await writeCoinYearQuantity(
       userId,
       coinId,
       y,
@@ -303,6 +337,13 @@ export async function decrementCoinYear(
   coinId: string,
   year: number
 ): Promise<YearResult> {
+  return runWriteAction(() => decrementCoinYearInner(coinId, year));
+}
+
+async function decrementCoinYearInner(
+  coinId: string,
+  year: number
+): Promise<YearResult> {
   try {
     const y = cleanYear(year);
     const userId = await requireUserId();
@@ -310,7 +351,7 @@ export async function decrementCoinYear(
       SELECT quantity FROM public.user_collection_years
       WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
     `) as unknown as { quantity: number }[];
-    const res = await setCoinYearQuantityInner(
+    const res = await writeCoinYearQuantity(
       userId,
       coinId,
       y,
@@ -327,6 +368,13 @@ export async function decrementCoinYear(
  * La riga principale viene sincronizzata = SOMMA dei pezzi di tutti gli anni.
  */
 export async function toggleCoinYear(
+  coinId: string,
+  year: number
+): Promise<YearResult> {
+  return runWriteAction(() => toggleCoinYearInner(coinId, year));
+}
+
+async function toggleCoinYearInner(
   coinId: string,
   year: number
 ): Promise<YearResult> {
@@ -388,6 +436,13 @@ export type DetailsResult = ActionResult<CoinDetailsResult>;
  * Richiede qty >= 1 (prima premi +). I campi non passati restano invariati.
  */
 export async function updateCoinDetails(
+  coinId: string,
+  input: CoinDetailsInput
+): Promise<DetailsResult> {
+  return runWriteAction(() => updateCoinDetailsInner(coinId, input));
+}
+
+async function updateCoinDetailsInner(
   coinId: string,
   input: CoinDetailsInput
 ): Promise<DetailsResult> {
