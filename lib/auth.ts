@@ -11,14 +11,21 @@ export interface SessionUser {
 const COOKIE_NAME = "euro_session";
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 giorni
 
+export const AUTH_SECRET_MESSAGE =
+  "AUTH_SECRET mancante o troppo corto (min 32 caratteri) su Vercel: aggiungilo in Project → Settings → Environment Variables (Production) e fai Redeploy. Genera con `openssl rand -base64 32`.";
+
 function secretKey(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
   if (!secret || secret.length < 32) {
-    throw new Error(
-      "AUTH_SECRET mancante o troppo corto (min 32 caratteri): genera con `openssl rand -base64 32`."
-    );
+    throw new Error(AUTH_SECRET_MESSAGE);
   }
   return new TextEncoder().encode(secret);
+}
+
+/** true se AUTH_SECRET è configurato (senza esporne il valore). */
+export function isAuthSecretConfigured(): boolean {
+  const secret = process.env.AUTH_SECRET;
+  return typeof secret === "string" && secret.length >= 32;
 }
 
 function cleanEmail(email: string): string {
@@ -55,23 +62,28 @@ export async function destroySession(): Promise<void> {
   store.delete(COOKIE_NAME);
 }
 
-/** Legge e verifica il cookie di sessione. Ritorna null se assente/scaduto. */
+/** Legge e verifica il cookie di sessione. Ritorna null se assente/scaduto. MAI throw. */
 export async function getSessionUser(): Promise<SessionUser | null> {
-  let token: string | undefined;
   try {
-    const store = await cookies();
-    token = store.get(COOKIE_NAME)?.value;
+    let token: string | undefined;
+    try {
+      const store = await cookies();
+      token = store.get(COOKIE_NAME)?.value;
+    } catch {
+      return null;
+    }
+    if (!token) return null;
+    try {
+      const { payload } = await jwtVerify(token, secretKey());
+      const id = typeof payload.sub === "string" ? payload.sub : null;
+      if (!id) return null;
+      const email = typeof payload.email === "string" ? payload.email : null;
+      return { id, email };
+    } catch {
+      return null;
+    }
   } catch {
-    return null;
-  }
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, secretKey());
-    const id = typeof payload.sub === "string" ? payload.sub : null;
-    if (!id) return null;
-    const email = typeof payload.email === "string" ? payload.email : null;
-    return { id, email };
-  } catch {
+    // Qualsiasi imprevisto (es. AUTH_SECRET mancante) = guest, mai #441.
     return null;
   }
 }
@@ -126,6 +138,9 @@ export async function signUpWithPassword(email: string, password: string): Promi
   } catch (e) {
     // Messaggi curati sopra (es. "già registrato") passano invariati.
     if (e instanceof Error && /già registrato|email|password/i.test(e.message)) throw e;
+    // AUTH_SECRET: messaggio esplicito, altrimenti in produzione
+    // diventerebbe "Minified React error #441" senza spiegazione.
+    if (e instanceof Error && e.message === AUTH_SECRET_MESSAGE) throw e;
     throw toFriendlyDbError(e, "Registrazione fallita: database non disponibile, riprova tra poco.");
   }
 }
@@ -140,6 +155,12 @@ export async function signInWithPassword(email: string, password: string): Promi
   const ok = await verifyPassword(password, found.password_hash);
   if (!ok) throw new Error("Credenziali non valide: controlla email e password.");
   const user: SessionUser = { id: found.id, email: found.email };
-  await createSession(user);
+  try {
+    await createSession(user);
+  } catch (e) {
+    // AUTH_SECRET mancante su Vercel: errore esplicito invece di #441.
+    if (e instanceof Error && e.message === AUTH_SECRET_MESSAGE) throw e;
+    throw toFriendlyDbError(e, "Login non riuscito: riprova tra poco.");
+  }
   return user;
 }

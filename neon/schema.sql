@@ -1,8 +1,6 @@
 -- ============================================================
 -- Euro Collection — schema completo da zero per Neon (Postgres)
 -- Esegui tutto nel Neon Console → SQL Editor → Run.
--- Consolidato da: supabase/schema.sql + migration 002..007,
--- adattato: niente auth.users / auth.uid() / RLS Supabase.
 -- Auth: tabella public.users con password hashata (bcrypt, lato app).
 -- Sessione: cookie JWT firmato lato app (lib/auth.ts), nessun
 -- componente DB. I controlli "solo proprietario / solo amici"
@@ -12,8 +10,8 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ------------------------------------------------------------
--- 0) Utenti (sostituisce auth.users di Supabase)
--- password_hash NULL = utente creato dal trigger legacy / OAuth futuro.
+-- 0) Utenti
+-- password_hash NULL = utente senza password (riservato a OAuth futuro).
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.users (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -178,7 +176,7 @@ CREATE TRIGGER trg_touch_requests_updated_at
   FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
 
 -- ------------------------------------------------------------
--- 7) Funzioni scambio (con p_actor_id esplicito: niente auth.uid())
+-- 7) Funzioni scambio (con p_actor_id esplicito)
 -- ------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.move_one_unit(
   p_giver uuid, p_receiver uuid, p_coin text, p_year int
