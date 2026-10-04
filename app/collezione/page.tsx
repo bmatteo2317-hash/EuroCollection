@@ -5,7 +5,7 @@ import {
   getTotalCount,
 } from "@/lib/catalog";
 import { getSessionUser } from "@/lib/auth";
-import { fetchOwnership, fetchYears } from "@/lib/collection";
+import { fetchOwnershipSafe, fetchYearsSafe } from "@/lib/collection";
 import type {
   CoinYearsMap,
   CollectionMap,
@@ -36,17 +36,15 @@ export default async function CollezionePage() {
   // Mai far crashare la pagina per un errore di lettura collezione:
   // un throw qui, durante la revalidazione scatenata da una Server Action
   // (es. + su una moneta), si propaga al client come
-  // "Minified React error #441". Fallback a collezione vuota.
+  // "Minified React error #441". Le versioni Safe non lanciano mai.
   let collection: CollectionMap = {};
   let details: OwnershipMap = {};
   let coinYears: CoinYearsMap = {};
-  try {
-    const fetched = await fetchOwnership(userId);
+  {
+    const fetched = await fetchOwnershipSafe(userId);
     collection = fetched.quantities;
     details = fetched.details;
-    coinYears = await fetchYears(userId);
-  } catch (e) {
-    console.error("[collezione] lettura collezione fallita:", e);
+    coinYears = await fetchYearsSafe(userId);
   }
 
   const catalog = getCatalog();

@@ -6,12 +6,10 @@ import { getSessionUser } from "@/lib/auth";
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
-  try {
-    const user = await getSessionUser();
-    if (user) redirect("/collezione");
-  } catch {
-    // Sessione illeggibile: mostra comunque il form di login.
-  }
+  // redirect() lancia un'eccezione speciale NEXT_REDIRECT: NON va mai
+  // messo dentro try/catch (verrebbe inghiottito e il redirect non avviene).
+  const user = await getSessionUser().catch(() => null);
+  if (user) redirect("/collezione");
 
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-6 py-10">

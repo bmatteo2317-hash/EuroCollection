@@ -78,9 +78,10 @@ function clampQty(qty: number): number {
 
 /**
  * Dettaglio leggibile di un errore da Server Action.
- * Gli errori di render Server Component arrivano in produzione come
- * "Minified React error #441": il `digest` di Next.js contiene la causa
- * reale (visibile anche nei server log su Vercel).
+ * In produzione gli errori delle Server Action arrivano come
+ * "Minified React error #441" (messaggio oscurato + `digest` opaco):
+ * in quel caso mostriamo un testo d'uso e rimandiamo ai log Vercel,
+ * perché il digest non è decodificabile dal browser.
  */
 function toErrorDetail(e: unknown): string {
   if (e instanceof Error) {
@@ -89,7 +90,13 @@ function toErrorDetail(e: unknown): string {
       typeof (e as { digest?: unknown }).digest === "string"
         ? (e as { digest?: string }).digest
         : null;
-    return digest ? `${e.message} (digest: ${digest})` : e.message;
+    const raw = e.message ?? "";
+    if (/Minified React error|#441/i.test(raw)) {
+      return digest
+        ? `Il server non ha completato l'operazione (codice ${digest}: vedi Function Logs su Vercel → /api/health per la diagnosi Neon).`
+        : "Il server non ha completato l'operazione: controlla la connessione Neon (/api/health) e riprova.";
+    }
+    return digest ? `${raw} (digest: ${digest})` : raw;
   }
   return "Errore sconosciuto";
 }

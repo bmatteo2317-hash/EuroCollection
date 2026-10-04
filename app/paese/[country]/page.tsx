@@ -8,7 +8,7 @@ import {
   isValidCountry,
 } from "@/lib/catalog";
 import { getSessionUser } from "@/lib/auth";
-import { fetchOwnership, fetchYears } from "@/lib/collection";
+import { fetchOwnershipSafe, fetchYearsSafe } from "@/lib/collection";
 import CoinGrid from "@/components/CoinGrid";
 import CountryFlag from "@/components/CountryFlag";
 import type { CollectionMap, CoinYearsMap, OwnershipMap } from "@/lib/types";
@@ -56,16 +56,17 @@ export default async function PaesePage({
     const user = await getSessionUser();
     if (user) {
       isGuest = false;
-      const fetched = await fetchOwnership(user.id);
+      // Versioni Safe: MAI throw (un throw qui = pagina #441 in produzione).
+      const fetched = await fetchOwnershipSafe(user.id);
       collection = fetched.quantities;
       details = fetched.details;
-      coinYears = await fetchYears(user.id);
+      coinYears = await fetchYearsSafe(user.id);
       for (const id of Object.keys(collection)) {
         if (id.startsWith(`${country}-`)) ownedHere += 1;
       }
     }
   } catch {
-    // Build senza DB: pagina comunque consultabile da guest
+    // Sessione illeggibile: pagina comunque consultabile da guest
   }
 
   const pct = coins.length

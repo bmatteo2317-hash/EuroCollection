@@ -5,7 +5,7 @@ import {
   getTotalCount,
 } from "@/lib/catalog";
 import { getSessionUser } from "@/lib/auth";
-import { fetchOwnership, fetchYears } from "@/lib/collection";
+import { fetchOwnershipSafe, fetchYearsSafe } from "@/lib/collection";
 import ProgressCircle from "@/components/ProgressCircle";
 import CountryExplorer from "@/components/CountryExplorer";
 import CoinGrid from "@/components/CoinGrid";
@@ -33,14 +33,15 @@ export default async function Home() {
     const user = await getSessionUser();
     if (user) {
       userEmail = user.email ?? null;
-      const fetched = await fetchOwnership(user.id);
+      // Versioni Safe: MAI throw (un throw qui = pagina #441 in produzione).
+      const fetched = await fetchOwnershipSafe(user.id);
       collection = fetched.quantities;
       details = fetched.details;
-      coinYears = await fetchYears(user.id);
+      coinYears = await fetchYearsSafe(user.id);
       owned = Object.keys(collection).length;
     }
   } catch {
-    // DB assente in build o sessione illeggibile: home consultabile da guest
+    // Sessione illeggibile: home consultabile da guest
   }
 
   return (

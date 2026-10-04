@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { sql, MISSING_TABLES_MESSAGE } from "@/lib/db";
+import { sql, MISSING_TABLES_MESSAGE, toFriendlyDbError } from "@/lib/db";
 import { requireSessionUser } from "@/lib/auth";
 import { fetchOwnership, fetchYears } from "@/lib/collection";
 import { isValidCountry } from "@/lib/catalog";
@@ -58,15 +58,19 @@ async function applyQuantity(
 ): Promise<QuantityUpdateResult> {
   const clean = clampQuantity(qty);
 
-  if (clean <= 0) {
-    await sql()`DELETE FROM public.user_collection WHERE user_id = ${userId} AND coin_id = ${coinId}`;
-  } else {
-    await sql()`
-      INSERT INTO public.user_collection (user_id, coin_id, quantity)
-      VALUES (${userId}, ${coinId}, ${clean})
-      ON CONFLICT (user_id, coin_id)
-      DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
-    `;
+  try {
+    if (clean <= 0) {
+      await sql()`DELETE FROM public.user_collection WHERE user_id = ${userId} AND coin_id = ${coinId}`;
+    } else {
+      await sql()`
+        INSERT INTO public.user_collection (user_id, coin_id, quantity)
+        VALUES (${userId}, ${coinId}, ${clean})
+        ON CONFLICT (user_id, coin_id)
+        DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
+      `;
+    }
+  } catch (e) {
+    throw toFriendlyDbError(e, "Salvataggio fallito: database non disponibile, riprova tra poco.");
   }
 
   revalidateCollectionPaths(coinId);
@@ -103,12 +107,17 @@ export async function incrementCoin(
   coinId: string
 ): Promise<QuantityUpdateResult> {
   const userId = await requireUserId();
-  const rows = (await sql()`
-    SELECT quantity FROM public.user_collection
-    WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
-  `) as unknown as { quantity: number }[];
-  const current = rows[0]?.quantity ?? 0;
-  return applyQuantity(userId, coinId, current + 1);
+  try {
+    const rows = (await sql()`
+      SELECT quantity FROM public.user_collection
+      WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
+    `) as unknown as { quantity: number }[];
+    const current = rows[0]?.quantity ?? 0;
+    return await applyQuantity(userId, coinId, current + 1);
+  } catch (e) {
+    if (e instanceof Error && e.message === MISSING_TABLES_MESSAGE) throw e;
+    throw toFriendlyDbError(e, "Salvataggio fallito: database non disponibile, riprova tra poco.");
+  }
 }
 
 /** Decrementa di 1 (a zero esegue DELETE). */
@@ -116,12 +125,16 @@ export async function decrementCoin(
   coinId: string
 ): Promise<QuantityUpdateResult> {
   const userId = await requireUserId();
-  const rows = (await sql()`
-    SELECT quantity FROM public.user_collection
-    WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
-  `) as unknown as { quantity: number }[];
-  const current = rows[0]?.quantity ?? 0;
-  return applyQuantity(userId, coinId, current - 1);
+  try {
+    const rows = (await sql()`
+      SELECT quantity FROM public.user_collection
+      WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
+    `) as unknown as { quantity: number }[];
+    const current = rows[0]?.quantity ?? 0;
+    return await applyQuantity(userId, coinId, current - 1);
+  } catch (e) {
+    throw toFriendlyDbError(e, "Salvataggio fallito: database non disponibile, riprova tra poco.");
+  }
 }
 
 /** Dettagli completi (quantità + grado + note) dell'utente loggato. */
@@ -163,18 +176,22 @@ async function syncMainRowFromYears(
   userId: string,
   coinId: string
 ): Promise<{ ownedYears: number; totalPieces: number }> {
-  const rows = (await sql()`
-    SELECT quantity FROM public.user_collection_years
-    WHERE user_id = ${userId} AND coin_id = ${coinId}
-  `) as unknown as { quantity: number }[];
-  const list = rows ?? [];
-  const ownedYears = list.filter((r) => (r.quantity ?? 0) > 0).length;
-  const totalPieces = list.reduce(
-    (sum, r) => sum + Math.max(0, r.quantity ?? 0),
-    0
-  );
-  await applyQuantity(userId, coinId, totalPieces);
-  return { ownedYears, totalPieces };
+  try {
+    const rows = (await sql()`
+      SELECT quantity FROM public.user_collection_years
+      WHERE user_id = ${userId} AND coin_id = ${coinId}
+    `) as unknown as { quantity: number }[];
+    const list = rows ?? [];
+    const ownedYears = list.filter((r) => (r.quantity ?? 0) > 0).length;
+    const totalPieces = list.reduce(
+      (sum, r) => sum + Math.max(0, r.quantity ?? 0),
+      0
+    );
+    await applyQuantity(userId, coinId, totalPieces);
+    return { ownedYears, totalPieces };
+  } catch (e) {
+    throw toFriendlyDbError(e, "Salvataggio anni fallito: database non disponibile, riprova tra poco.");
+  }
 }
 
 /**
@@ -203,8 +220,7 @@ export async function setCoinYearQuantity(
       `;
     }
   } catch (e) {
-    console.error("[collection] setCoinYearQuantity fallita:", e);
-    throw new Error(MISSING_TABLES_MESSAGE);
+    throw toFriendlyDbError(e, "Salvataggio anni fallito: database non disponibile, riprova tra poco.");
   }
 
   const { ownedYears, totalPieces } = await syncMainRowFromYears(
@@ -221,11 +237,15 @@ export async function incrementCoinYear(
 ): Promise<ToggleYearResult> {
   const y = cleanYear(year);
   const userId = await requireUserId();
-  const rows = (await sql()`
-    SELECT quantity FROM public.user_collection_years
-    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
-  `) as unknown as { quantity: number }[];
-  return setCoinYearQuantity(coinId, y, (rows[0]?.quantity ?? 0) + 1);
+  try {
+    const rows = (await sql()`
+      SELECT quantity FROM public.user_collection_years
+      WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+    `) as unknown as { quantity: number }[];
+    return await setCoinYearQuantity(coinId, y, (rows[0]?.quantity ?? 0) + 1);
+  } catch (e) {
+    throw toFriendlyDbError(e, "Salvataggio anni fallito: database non disponibile, riprova tra poco.");
+  }
 }
 
 /** −1 pezzo di un anno (a zero l'anno viene rimosso). */
@@ -235,11 +255,15 @@ export async function decrementCoinYear(
 ): Promise<ToggleYearResult> {
   const y = cleanYear(year);
   const userId = await requireUserId();
-  const rows = (await sql()`
-    SELECT quantity FROM public.user_collection_years
-    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
-  `) as unknown as { quantity: number }[];
-  return setCoinYearQuantity(coinId, y, (rows[0]?.quantity ?? 0) - 1);
+  try {
+    const rows = (await sql()`
+      SELECT quantity FROM public.user_collection_years
+      WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+    `) as unknown as { quantity: number }[];
+    return await setCoinYearQuantity(coinId, y, (rows[0]?.quantity ?? 0) - 1);
+  } catch (e) {
+    throw toFriendlyDbError(e, "Salvataggio anni fallito: database non disponibile, riprova tra poco.");
+  }
 }
 
 /**
@@ -253,28 +277,32 @@ export async function toggleCoinYear(
   const y = cleanYear(year);
   const userId = await requireUserId();
 
-  const rows = (await sql()`
-    SELECT quantity FROM public.user_collection_years
-    WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
-  `) as unknown as { quantity: number }[];
-  const has = (rows[0]?.quantity ?? 0) > 0;
+  try {
+    const rows = (await sql()`
+      SELECT quantity FROM public.user_collection_years
+      WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y} LIMIT 1
+    `) as unknown as { quantity: number }[];
+    const has = (rows[0]?.quantity ?? 0) > 0;
 
-  if (has) {
-    await sql()`DELETE FROM public.user_collection_years WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
-  } else {
-    await sql()`
-      INSERT INTO public.user_collection_years (user_id, coin_id, year, quantity)
-      VALUES (${userId}, ${coinId}, ${y}, 1)
-      ON CONFLICT (user_id, coin_id, year)
-      DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
-    `;
+    if (has) {
+      await sql()`DELETE FROM public.user_collection_years WHERE user_id = ${userId} AND coin_id = ${coinId} AND year = ${y}`;
+    } else {
+      await sql()`
+        INSERT INTO public.user_collection_years (user_id, coin_id, year, quantity)
+        VALUES (${userId}, ${coinId}, ${y}, 1)
+        ON CONFLICT (user_id, coin_id, year)
+        DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = now()
+      `;
+    }
+
+    const { ownedYears, totalPieces } = await syncMainRowFromYears(
+      userId,
+      coinId
+    );
+    return { coinId, year: y, quantity: has ? 0 : 1, ownedYears, totalPieces };
+  } catch (e) {
+    throw toFriendlyDbError(e, "Salvataggio anni fallito: database non disponibile, riprova tra poco.");
   }
-
-  const { ownedYears, totalPieces } = await syncMainRowFromYears(
-    userId,
-    coinId
-  );
-  return { coinId, year: y, quantity: has ? 0 : 1, ownedYears, totalPieces };
 }
 
 function cleanGrade(grade: Grade | null | undefined): Grade | null {
@@ -310,17 +338,40 @@ export async function updateCoinDetails(
   if (input.grade !== undefined) patch.grade = cleanGrade(input.grade);
   if (input.notes !== undefined) patch.notes = cleanNotes(input.notes);
 
-  const readRows = async () => {
-    const rows = (await sql()`
-      SELECT quantity, grade, notes FROM public.user_collection
-      WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
-    `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
-    return rows[0] ?? null;
-  };
+  try {
+    const readRows = async () => {
+      const rows = (await sql()`
+        SELECT quantity, grade, notes FROM public.user_collection
+        WHERE user_id = ${userId} AND coin_id = ${coinId} LIMIT 1
+      `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
+      return rows[0] ?? null;
+    };
 
-  if (Object.keys(patch).length === 0) {
-    const data = await readRows();
-    if (!data || data.quantity <= 0) return { coinId, ownership: null };
+    if (Object.keys(patch).length === 0) {
+      const data = await readRows();
+      if (!data || data.quantity <= 0) return { coinId, ownership: null };
+      return {
+        coinId,
+        ownership: {
+          quantity: data.quantity,
+          grade: isGrade(data.grade) ? data.grade : null,
+          notes: data.notes ?? null,
+        },
+      };
+    }
+
+    const grade = patch.grade ?? null;
+    const notes = patch.notes ?? null;
+    const updated = (await sql()`
+      UPDATE public.user_collection
+      SET grade = ${grade}, notes = ${notes}, updated_at = now()
+      WHERE user_id = ${userId} AND coin_id = ${coinId} AND quantity > 0
+      RETURNING quantity, grade, notes
+    `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
+    const data = updated[0] ?? null;
+    if (!data) throw new Error("NOT_OWNED");
+
+    revalidateCollectionPaths(coinId);
     return {
       coinId,
       ownership: {
@@ -329,28 +380,10 @@ export async function updateCoinDetails(
         notes: data.notes ?? null,
       },
     };
+  } catch (e) {
+    if (e instanceof Error && e.message === "NOT_OWNED") throw e;
+    throw toFriendlyDbError(e, "Salvataggio dettagli fallito: database non disponibile, riprova tra poco.");
   }
-
-  const grade = patch.grade ?? null;
-  const notes = patch.notes ?? null;
-  const updated = (await sql()`
-    UPDATE public.user_collection
-    SET grade = ${grade}, notes = ${notes}, updated_at = now()
-    WHERE user_id = ${userId} AND coin_id = ${coinId} AND quantity > 0
-    RETURNING quantity, grade, notes
-  `) as unknown as { quantity: number; grade: string | null; notes: string | null }[];
-  const data = updated[0] ?? null;
-  if (!data) throw new Error("NOT_OWNED");
-
-  revalidateCollectionPaths(coinId);
-  return {
-    coinId,
-    ownership: {
-      quantity: data.quantity,
-      grade: isGrade(data.grade) ? data.grade : null,
-      notes: data.notes ?? null,
-    },
-  };
 }
 
 /** Dettagli di un anno specifico (grado + note del singolo anno). */

@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-import { sql } from "@/lib/db";
+import { sql, toFriendlyDbError } from "@/lib/db";
 
 export interface SessionUser {
   id: string;
@@ -97,8 +97,12 @@ interface UserRow {
 }
 
 async function findUserByEmail(email: string): Promise<UserRow | null> {
-  const res = (await sql()`SELECT id, email, password_hash FROM public.users WHERE lower(email) = lower(${email}) LIMIT 1`) as unknown as UserRow[];
-  return res[0] ?? null;
+  try {
+    const res = (await sql()`SELECT id, email, password_hash FROM public.users WHERE lower(email) = lower(${email}) LIMIT 1`) as unknown as UserRow[];
+    return res[0] ?? null;
+  } catch (e) {
+    throw toFriendlyDbError(e, "Login non riuscito: database non disponibile, riprova tra poco.");
+  }
 }
 
 /**
@@ -112,11 +116,18 @@ export async function signUpWithPassword(email: string, password: string): Promi
   const existing = await findUserByEmail(clean);
   if (existing) throw new Error("Questo indirizzo è già registrato: accedi invece di registrarti.");
   const passwordHash = await hashPassword(password);
-  const res = (await sql()`INSERT INTO public.users (email, password_hash) VALUES (${clean}, ${passwordHash}) RETURNING id, email`) as unknown as { id: string; email: string | null }[];
-  const row = res[0];
-  const user: SessionUser = { id: row.id, email: row.email };
-  await createSession(user);
-  return user;
+  try {
+    const res = (await sql()`INSERT INTO public.users (email, password_hash) VALUES (${clean}, ${passwordHash}) RETURNING id, email`) as unknown as { id: string; email: string | null }[];
+    const row = res[0];
+    if (!row) throw new Error("Registrazione fallita: riprova tra poco.");
+    const user: SessionUser = { id: row.id, email: row.email };
+    await createSession(user);
+    return user;
+  } catch (e) {
+    // Messaggi curati sopra (es. "già registrato") passano invariati.
+    if (e instanceof Error && /già registrato|email|password/i.test(e.message)) throw e;
+    throw toFriendlyDbError(e, "Registrazione fallita: database non disponibile, riprova tra poco.");
+  }
 }
 
 /** Login con email + password esistenti, apre la sessione. */
