@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Tema scuro comandato da interruttore (classe .dark su <html>)
+   invece che dal sistema operativo. Default: scuro. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* --- Ritocchi mobile --- */
 html {
   -webkit-tap-highlight-color: transparent;

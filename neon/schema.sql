@@ -82,6 +82,8 @@ CREATE TRIGGER trg_touch_years_updated_at
 CREATE TABLE IF NOT EXISTS public.profiles (
   id uuid PRIMARY KEY REFERENCES public.users (id) ON DELETE CASCADE,
   display_name text NOT NULL,
+  avatar text,
+  country char(2),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

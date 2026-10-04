@@ -8,11 +8,20 @@ import {
   getDeviceUserId,
   isValidDeviceId,
 } from "@/lib/auth";
+import { isValidCountry, type CountryCode } from "@/lib/catalog";
+import {
+  cleanDisplayName,
+  DEFAULT_AVATAR,
+  isValidAvatar,
+  type AvatarChoice,
+} from "@/lib/profile";
 import type { ActionResult, VoidResult } from "@/lib/types";
 
 export interface ProfileInfo {
   deviceId: string;
   displayName: string;
+  avatar: AvatarChoice;
+  country: CountryCode | null;
 }
 
 /** Profilo del dispositivo corrente (mai-throw: null se DB giù). */
@@ -21,9 +30,23 @@ export async function getProfile(): Promise<ProfileInfo | null> {
     const id = await getDeviceUserId();
     if (!id) return null;
     const rows = (await sql()`
-      SELECT display_name FROM public.profiles WHERE id = ${id} LIMIT 1
-    `) as unknown as { display_name: string }[];
-    return { deviceId: id, displayName: rows[0]?.display_name ?? "Collezionista" };
+      SELECT display_name, avatar, country FROM public.profiles WHERE id = ${id} LIMIT 1
+    `) as unknown as {
+      display_name: string;
+      avatar: string | null;
+      country: string | null;
+    }[];
+    const row = rows[0];
+    if (!row) return { deviceId: id, displayName: "Collezionista", avatar: DEFAULT_AVATAR, country: null };
+    return {
+      deviceId: id,
+      displayName: row.display_name || "Collezionista",
+      avatar: isValidAvatar(row.avatar) ? row.avatar : DEFAULT_AVATAR,
+      country:
+        typeof row.country === "string" && isValidCountry(row.country)
+          ? row.country
+          : null,
+    };
   } catch (e) {
     console.error("[profile] lettura fallita:", e);
     return null;
@@ -36,22 +59,27 @@ export async function getDisplayName(): Promise<string | null> {
   return p?.displayName ?? null;
 }
 
-function cleanName(name: string): string | null {
-  const t = name.trim().replace(/\s+/g, " ").slice(0, 40);
-  if (t.length < 2) return null;
-  return t;
+export interface SaveProfileInput {
+  displayName: string;
+  avatar: string;
+  /** Codice paese del cuore, o "" per nessuno. */
+  country: string;
 }
 
-/** Salva il nome visualizzato (come il Profilo di HOME-GYM). */
-export async function saveDisplayName(name: string): Promise<VoidResult> {
+/** Salva nome + avatar + paese (come il Profilo di HOME-GYM). */
+export async function saveProfile(input: SaveProfileInput): Promise<VoidResult> {
   try {
-    const clean = cleanName(name);
+    const clean = cleanDisplayName(input.displayName);
     if (!clean) {
       return { ok: false, error: "Il nome deve avere almeno 2 caratteri." };
     }
+    const avatar = isValidAvatar(input.avatar) ? input.avatar : DEFAULT_AVATAR;
+    const country =
+      input.country && isValidCountry(input.country) ? input.country : null;
     const userId = await ensureDeviceUserId();
-    await sql()`INSERT INTO public.profiles (id, display_name) VALUES (${userId}, ${clean}) ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name`;
+    await sql()`INSERT INTO public.profiles (id, display_name, avatar, country) VALUES (${userId}, ${clean}, ${avatar}, ${country}) ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, avatar = EXCLUDED.avatar, country = EXCLUDED.country`;
     revalidatePath("/");
+    revalidatePath("/profilo");
     return { ok: true };
   } catch (e) {
     return { ok: false, error: toActionError(e) };

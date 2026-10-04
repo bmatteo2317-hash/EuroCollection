@@ -2,35 +2,53 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { adoptDevice, saveDisplayName } from "@/app/actions/profile";
+import { adoptDevice, saveProfile } from "@/app/actions/profile";
+import { AVATAR_CHOICES } from "@/lib/profile";
+
+export interface CountryOption {
+  code: string;
+  name: string;
+  flag: string;
+}
 
 export default function ProfileForm({
   initialName,
+  initialAvatar,
+  initialCountry,
+  countries,
   deviceId,
 }: {
   initialName: string;
+  initialAvatar: string;
+  initialCountry: string;
+  countries: CountryOption[];
   deviceId: string | null;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [name, setName] = useState(initialName);
+  const [avatar, setAvatar] = useState(initialAvatar);
+  const [country, setCountry] = useState(initialCountry);
   const [importId, setImportId] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const dirty = name.trim() !== initialName.trim();
+  const dirty =
+    name.trim() !== initialName.trim() ||
+    avatar !== initialAvatar ||
+    country !== initialCountry;
 
   const save = (): void => {
     setErr(null);
     setMsg(null);
     startTransition(async () => {
-      const res = await saveDisplayName(name);
+      const res = await saveProfile({ displayName: name, avatar, country });
       if (!res.ok) {
         setErr(res.error);
         return;
       }
-      setMsg("Nome salvato! 🎉");
+      setMsg("Profilo salvato! 🎉");
       router.refresh();
     });
   };
@@ -77,26 +95,74 @@ export default function ProfileForm({
         </p>
       )}
 
-      <section className="flex flex-col gap-3 rounded-3xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-        <h2 className="text-lg font-bold">👤 Il tuo nome</h2>
-        <p className="text-xs text-zinc-500">
-          Come appari negli scambi con gli altri collezionisti.
-        </p>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value.slice(0, 40))}
-          placeholder="es. Marco"
-          maxLength={40}
-          aria-label="Nome visualizzato"
-          className="w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-800"
-        />
+      <section className="flex flex-col gap-4 rounded-3xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <h2 className="text-lg font-bold">👤 Il tuo collezionista</h2>
+
+        <div>
+          <p className="mb-2 text-xs font-semibold text-zinc-500">
+            Avatar
+          </p>
+          <div
+            role="radiogroup"
+            aria-label="Scegli avatar"
+            className="grid grid-cols-6 gap-2"
+          >
+            {AVATAR_CHOICES.map((a) => (
+              <button
+                key={a}
+                type="button"
+                role="radio"
+                aria-checked={avatar === a}
+                aria-label={`Avatar ${a}`}
+                onClick={() => setAvatar(a)}
+                className={`flex aspect-square items-center justify-center rounded-2xl text-2xl transition ${
+                  avatar === a
+                    ? "bg-zinc-900 shadow-md ring-2 ring-emerald-500 dark:bg-zinc-100"
+                    : "bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+                }`}
+              >
+                {a}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="flex flex-col gap-1 text-xs font-semibold">
+          Nome visualizzato
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value.slice(0, 40))}
+            placeholder="es. Marco"
+            maxLength={40}
+            aria-label="Nome visualizzato"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-800"
+          />
+        </label>
+
+        <label className="flex flex-col gap-1 text-xs font-semibold">
+          Paese del cuore
+          <select
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            aria-label="Paese del cuore"
+            className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-800"
+          >
+            <option value="">— Nessuno —</option>
+            {countries.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.flag} {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <button
           type="button"
           disabled={isPending || !dirty}
           onClick={save}
           className="rounded-xl bg-zinc-900 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
         >
-          {isPending ? "Salvataggio…" : "Salva nome"}
+          {isPending ? "Salvataggio…" : "Salva profilo"}
         </button>
       </section>
 
@@ -122,7 +188,7 @@ export default function ProfileForm({
           </div>
         ) : (
           <p className="text-xs text-amber-700 dark:text-amber-300">
-            ID non ancora creato: premi + su una moneta o salva il nome e
+            ID non ancora creato: premi + su una moneta o salva il profilo e
             apparirà qui.
           </p>
         )}

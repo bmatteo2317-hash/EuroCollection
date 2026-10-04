@@ -1,14 +1,10 @@
 import Link from "next/link";
-import { getDisplayName } from "@/app/actions/profile";
+import { getProfile } from "@/app/actions/profile";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default async function Navbar() {
-  // Mai far crashare il layout: senza nome si mostra "Profilo".
-  let name: string | null = null;
-  try {
-    name = await getDisplayName();
-  } catch {
-    name = null;
-  }
+  // Mai far crashare il layout: senza profilo si mostra "Profilo".
+  const profile = await getProfile().catch(() => null);
 
   return (
     <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-black/60">
@@ -36,11 +32,12 @@ export default async function Navbar() {
           >
             Scambi
           </Link>
+          <ThemeToggle />
           <Link
             href="/profilo"
             className="max-w-24 truncate rounded-full bg-zinc-900 px-2.5 py-1.5 font-medium text-white sm:max-w-none sm:px-3 dark:bg-zinc-100 dark:text-zinc-900"
           >
-            {name ? `👤 ${name}` : "👤 Profilo"}
+            {profile ? `${profile.avatar} ${profile.displayName}` : "👤 Profilo"}
           </Link>
         </div>
       </nav>
