@@ -156,7 +156,10 @@ export function toActionError(e: unknown): string {
       : "Il server non ha completato l'operazione: apri /api/health per la diagnosi del database e riprova.";
   }
   if (isMissingEnvError(e)) return MISSING_ENV_MESSAGE;
-  if (isMissingTableError(e)) return MISSING_TABLES_MESSAGE;
+  if (isMissingTableError(e)) {
+    const rawMsg = e instanceof Error ? e.message : "";
+    return `${MISSING_TABLES_MESSAGE}${techDetail(rawMsg)}`;
+  }
   // Prima i messaggi già convertiti (contengono "neon" e ingannerebbero
   // il controllo di connessione qui sotto): mai riclassificarli.
   if (

@@ -4,12 +4,32 @@ import { DB_ENV_KEYS, isDbConfigured, sql } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /**
+ * Host + database della connection string in uso, SENZA credenziali
+ * (niente utente/password): serve a confrontare con endpoint e database
+ * visibili nel Neon Console e capire se Vercel punta al progetto giusto.
+ */
+function publicDbTarget(): { host: string; db: string } | null {
+  for (const k of DB_ENV_KEYS) {
+    const v = process.env[k];
+    if (typeof v !== "string" || !v.trim()) continue;
+    try {
+      const u = new URL(v.trim());
+      return { host: u.hostname, db: u.pathname.replace(/^\//, "") || "(?)", };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
  * Diagnostica del collegamento Neon su Vercel.
  * GET /api/health → { ok, stage, present, ... }
  * Non espone valori dei secret, solo se sono presenti/validi.
  */
 export async function GET() {
   const started = Date.now();
+  const target = publicDbTarget();
   const present = DB_ENV_KEYS.filter((k) => {
     const v = process.env[k];
     return typeof v === "string" && v.trim().length > 0;
@@ -24,6 +44,7 @@ export async function GET() {
           "Nessuna connection string trovata. Su Vercel: Project → Storage (Neon) → verifica Environment Variables per Production → Redeploy. In locale: .env.local con DATABASE_URL.",
         present,
         expected: DB_ENV_KEYS,
+        target,
       },
       { status: 500 }
     );
@@ -72,6 +93,7 @@ export async function GET() {
           stage: "schema",
           message: `Manca lo schema su Neon (tabelle mancanti: ${missing.join(", ")}). Esegui neon/schema.sql nel SQL Editor di Neon.`,
           missing,
+          target,
           latencyMs: Date.now() - started,
         },
         { status: 500 }
@@ -88,6 +110,7 @@ export async function GET() {
           mirrorError,
           mirrorMs,
           present,
+          target,
           latencyMs: Date.now() - started,
         },
         { status: 500 }
@@ -99,6 +122,7 @@ export async function GET() {
       stage: "ok",
       message: "Neon raggiungibile e schema presente.",
       present,
+      target,
       mirrorMs,
       latencyMs: Date.now() - started,
     });
@@ -113,6 +137,7 @@ export async function GET() {
             ? e.message
             : "Neon non raggiungibile: progetto in pausa o connection string errata.",
         present,
+        target,
         latencyMs: Date.now() - started,
       },
       { status: 500 }
