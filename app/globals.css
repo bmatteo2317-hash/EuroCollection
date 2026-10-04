@@ -5,6 +5,13 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* --- Ritocchi mobile --- */
+html,
+body {
+  /* Niente scorrimento laterale: la pagina non deve mai "slidare".
+     `clip` (e non `hidden`) preserva il funzionamento di position: sticky. */
+  overflow-x: clip;
+}
+
 html {
   -webkit-tap-highlight-color: transparent;
 }
