@@ -1,1 +1,21 @@
 @import "tailwindcss";
+
+/* --- Ritocchi mobile --- */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  /* Spazio per la gesture-bar / notch in modalità app standalone. */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* iOS zooma in automatico sui campi con testo < 16px: su telefono
+   si usa 16px per non far saltare il layout al focus. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

@@ -13,7 +13,7 @@ export default function ProgressCircle({ owned, total, size = 148 }: Props) {
   const filled = (percent / 100) * c;
 
   return (
-    <div className="flex items-center gap-5">
+    <div className="flex flex-col items-center gap-5 min-[430px]:flex-row">
       <div className="relative" style={{ width: size, height: size }}>
         <svg width={size} height={size} className="-rotate-90">
           <circle

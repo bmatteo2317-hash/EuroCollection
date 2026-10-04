@@ -1,11 +1,36 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 
 export const metadata: Metadata = {
   title: "EuroCollection — Catalogo e collezione monete Euro",
   description:
     "Catalogo statico di tutte le monete euro (BCE) + collezione privata con Neon. Italia, Finlandia, Germania e tutta l'Eurozona.",
+  applicationName: "EuroCollection",
+  appleWebApp: {
+    capable: true,
+    title: "EuroCollection",
+    statusBarStyle: "black-translucent",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+  icons: {
+    icon: [{ url: "/favicon-32.png", sizes: "32x32", type: "image/png" }],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+    { media: "(prefers-color-scheme: light)", color: "#fafafa" },
+  ],
 };
 
 export default function RootLayout({
@@ -16,6 +41,7 @@ export default function RootLayout({
   return (
     <html lang="it" className="h-full antialiased">
       <body className="flex min-h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-black dark:text-zinc-100">
+        <ServiceWorkerRegister />
         <Navbar />
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
           {children}

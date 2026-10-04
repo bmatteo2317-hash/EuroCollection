@@ -589,7 +589,7 @@ export default function CoinGrid({
                     onClick={() => change(coin, -1)}
                     disabled={qty === 0 || busy}
                     aria-label={`Rimuovi ${coin.id}`}
-                    className="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-300 text-lg font-bold text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-30 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-300 text-xl font-bold text-zinc-600 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-30 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
                     −
                   </button>
@@ -608,7 +608,7 @@ export default function CoinGrid({
                     onClick={() => change(coin, 1)}
                     disabled={qty >= COLLECTION_LIMITS.MAX || busy}
                     aria-label={`Aggiungi ${coin.id}`}
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-900 text-lg font-bold text-white transition hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-xl font-bold text-white transition hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
                   >
                     +
                   </button>
@@ -746,7 +746,7 @@ function YearChips({
                       onClick={() => step(y, -1)}
                       disabled={busy}
                       aria-label={`Un pezzo in meno del ${y}`}
-                      className="flex h-5 w-5 items-center justify-center rounded-full border border-zinc-300 text-xs font-bold text-zinc-600 hover:bg-zinc-100 disabled:cursor-wait disabled:opacity-40 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                      className="flex h-7 w-7 items-center justify-center rounded-full border border-zinc-300 text-sm font-bold text-zinc-600 hover:bg-zinc-100 disabled:cursor-wait disabled:opacity-40 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700"
                     >
                       −
                     </button>
@@ -756,7 +756,7 @@ function YearChips({
                       disabled={busy || qty >= COLLECTION_LIMITS.MAX}
                       aria-label={`Un doppione in più del ${y}`}
                       title="Aggiungi un doppione di questo anno"
-                      className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-900 text-xs font-bold text-white hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
+                      className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-900 text-sm font-bold text-white hover:bg-zinc-700 disabled:opacity-30 dark:bg-zinc-100 dark:text-zinc-900"
                     >
                       +
                     </button>
